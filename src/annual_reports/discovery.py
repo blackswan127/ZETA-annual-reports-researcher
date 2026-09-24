@@ -165,10 +165,16 @@ class DiscoveryStore:
         )
         self.connection.commit()
 
-    def companies(self, country: str) -> list[Company]:
+    def companies(self, country: str | None = None) -> list[Company]:
+        if country is not None:
+            query = "SELECT * FROM companies WHERE country=?"
+            params = (country,)
+        else:
+            query = "SELECT * FROM companies"
+            params = ()
         return [Company(row["country"], row["company_name"], row["exchange"],
                         row["lei"], row["isin"], row["ticker"], row["cik"], row["aliases"])
-                for row in self.connection.execute("SELECT * FROM companies WHERE country=?", (country,))]
+                for row in self.connection.execute(query, params)]
 
     def years(self, company_key: str) -> set[int]:
         return {row[0] for row in self.connection.execute(
@@ -342,9 +348,9 @@ def _ingest_sec_data(store: DiscoveryStore, company: Company, data: dict) -> int
 
 
 def discover_sec_bulk(store: DiscoveryStore, archive_path: Path) -> dict:
-    companies = store.companies("USA")
+    companies = [c for c in store.companies() if c.cik and c.cik.strip()]
     if not companies:
-        raise ValueError("load a US company universe first")
+        raise ValueError("load a company universe with SEC CIKs first")
     found = 0
     missing_cik = []
     with zipfile.ZipFile(archive_path) as archive:
@@ -369,7 +375,7 @@ async def discover_sec_history(
     tasks: list[tuple[Company, str]] = []
     with zipfile.ZipFile(archive_path) as archive:
         names = {Path(name).name: name for name in archive.namelist() if name.endswith(".json")}
-        for company in store.companies("USA"):
+        for company in [c for c in store.companies() if c.cik and c.cik.strip()]:
             member = names.get(f"CIK{int(company.cik):010d}.json")
             if not member:
                 continue

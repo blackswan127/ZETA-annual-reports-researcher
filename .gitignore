@@ -28,3 +28,4 @@ annualreports-bulk-index.csv
 annualreports-review.csv
 annualreports-unresolved.csv
 annualreports-content-review.csv
+node_modules/

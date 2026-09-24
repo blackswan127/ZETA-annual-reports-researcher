@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+from curl_cffi.requests import AsyncSession
 import httpx
 
 from .catalog import Report
@@ -28,7 +29,7 @@ class FcaJob:
     report: Report
 
 
-def _jobs(store: DiscoveryStore, limit: int | None) -> list[FcaJob]:
+def _jobs(store: DiscoveryStore, limit: int | None, company_keys: set[str] | None = None) -> list[FcaJob]:
     query = """SELECT c.*, u.country, u.exchange, u.lei, u.isin, u.ticker
                FROM candidates c JOIN companies u USING(company_key)
                WHERE c.source='FCA_NSM' AND c.report_year IS NOT NULL
@@ -41,6 +42,8 @@ def _jobs(store: DiscoveryStore, limit: int | None) -> list[FcaJob]:
     jobs: list[FcaJob] = []
     seen: set[tuple[str, int]] = set()
     for item in store.connection.execute(query):
+        if company_keys is not None and item["company_key"] not in company_keys:
+            continue
         identity = (item["company_key"], item["report_year"])
         if identity in seen:
             continue
@@ -85,25 +88,45 @@ class AdaptiveFcaGate:
             self.condition.notify_all()
 
 
-async def _fetch_original(client: httpx.AsyncClient, url: str,
+async def _fetch_original(session: AsyncSession | httpx.AsyncClient, url: str,
                           gate: AdaptiveFcaGate, max_bytes: int) -> bytes:
     last_error: Exception | None = None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+    }
     for attempt in range(3):
         await gate.acquire()
         status = 0
         try:
-            async with client.stream("GET", url, follow_redirects=True) as response:
-                status = response.status_code
+            if isinstance(session, AsyncSession):
+                resp = await session.get(url, headers=headers, timeout=30.0, allow_redirects=True)
+                status = resp.status_code
                 if status in {429, 503}:
                     last_error = ValueError(f"FCA HTTP {status}")
+                elif status != 200:
+                    last_error = ValueError(f"FCA HTTP {status}")
                 else:
-                    response.raise_for_status()
-                    data = bytearray()
-                    async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
-                        data.extend(chunk)
-                        if len(data) > max_bytes:
-                            raise ValueError("FCA original exceeds size limit")
-                    return bytes(data)
+                    data = resp.content
+                    if len(data) > max_bytes:
+                        raise ValueError("FCA original exceeds size limit")
+                    return data
+            else:
+                async with session.stream("GET", url, follow_redirects=True) as response:
+                    status = response.status_code
+                    if status in {429, 503}:
+                        last_error = ValueError(f"FCA HTTP {status}")
+                    else:
+                        response.raise_for_status()
+                        data = bytearray()
+                        async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                            data.extend(chunk)
+                            if len(data) > max_bytes:
+                                raise ValueError("FCA original exceeds size limit")
+                        return bytes(data)
+        except Exception as exc:
+            last_error = exc
         finally:
             await gate.release(status)
         await asyncio.sleep(2 ** attempt)
@@ -160,7 +183,7 @@ async def render_fca_originals(
     state_path: Path, output_root: Path, cache_root: Path,
     *, chrome_path: Path | None = None, limit: int | None = None,
     network_workers: int = 16, render_workers: int = 4,
-    max_mib: int = 128,
+    max_mib: int = 128, company_keys: set[str] | None = None,
 ) -> dict:
     try:
         from playwright.async_api import async_playwright
@@ -171,10 +194,14 @@ async def render_fca_originals(
     with RunLock(state_path):
         discovery = DiscoveryStore(state_path)
         try:
-            jobs = _jobs(discovery, limit)
+            jobs = _jobs(discovery, limit, company_keys=company_keys)
         finally:
             discovery.close()
         if not jobs:
+            if company_keys is not None:
+                return {"selected": 0, "originals_downloaded": 0, "pdf_completed": 0,
+                        "skipped": 0, "failed": 0, "elapsed_s": 0.0,
+                        "documents_per_second": 0.0, "failures": []}
             raise ValueError("no FCA structured/unknown-format annual reports were discovered")
         ledger = StateStore(state_path)
         ensure_conversion_table(ledger.connection)
@@ -196,11 +223,8 @@ async def render_fca_originals(
             else:
                 queue.put_nowait(job)
         gate = AdaptiveFcaGate()
-        timeout = httpx.Timeout(connect=10, read=90, write=30, pool=30)
         try:
-            async with httpx.AsyncClient(timeout=timeout,
-                                         limits=httpx.Limits(max_connections=network_workers,
-                                                              max_keepalive_connections=network_workers)) as client:
+            async with AsyncSession(impersonate="chrome") as session:
                 async with async_playwright() as playwright:
                     browser = await playwright.chromium.launch(
                         executable_path=str(chrome_path) if chrome_path else None,
@@ -228,7 +252,7 @@ async def render_fca_originals(
                                     raw = cache_path.read_bytes()
                                     _source_format(raw)
                                 else:
-                                    raw = await _fetch_original(client, job.report.pdf_url, gate,
+                                    raw = await _fetch_original(session, job.report.pdf_url, gate,
                                                                 max_mib * 1024 * 1024)
                                     _source_format(raw)
                                     await asyncio.to_thread(_write_original, cache_path, raw)
@@ -258,8 +282,10 @@ async def render_fca_originals(
                                     elif source_format == "html":
                                         await page.set_content(raw.decode("utf-8", errors="replace"),
                                                                wait_until="domcontentloaded", timeout=30_000)
-                                        pdf = await page.pdf(format="A4", print_background=True,
-                                                             prefer_css_page_size=True)
+                                        pdf = await asyncio.wait_for(
+                                            page.pdf(format="A4", print_background=True, prefer_css_page_size=True),
+                                            timeout=90.0,
+                                        )
                                         engine = "chromium"
                                     else:
                                         with tempfile.TemporaryDirectory(dir=cache_root) as folder:
@@ -267,8 +293,10 @@ async def render_fca_originals(
                                                 entry = await asyncio.to_thread(_safe_extract, archive, Path(folder))
                                             await page.goto(entry.resolve().as_uri(), wait_until="domcontentloaded",
                                                             timeout=30_000)
-                                            pdf = await page.pdf(format="A4", print_background=True,
-                                                                 prefer_css_page_size=True)
+                                            pdf = await asyncio.wait_for(
+                                                page.pdf(format="A4", print_background=True, prefer_css_page_size=True),
+                                                timeout=90.0,
+                                            )
                                         engine = "chromium"
                                     pages, digest = await asyncio.to_thread(validate_and_store, pdf, job.report, output_root)
                                     result = Result(job.report, "downloaded", size=len(pdf), pages=pages, sha256=digest)

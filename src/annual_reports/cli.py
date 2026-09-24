@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .catalog import load_manifest
-from .discovery import (DiscoveryStore, discover_sec_bulk, discover_sec_history, download_sec_bulk,
+from .catalog import Report, load_manifest
+from .discovery import (Company, DiscoveryStore, discover_sec_bulk, discover_sec_history, download_sec_bulk,
                         export_pdf_manifest, import_fca_csv, import_fca_historic_map,
                         parse_years, read_universe)
 from .conversion import render_sec_html
@@ -25,6 +25,19 @@ from .annualreports import import_annualreports
 from .annualreports_site import (audit_reports as audit_annualreports_site,
                                  discover as discover_annualreports_site)
 from .engine import RunLock, Settings, StateStore, native_path, run, verify_store
+
+
+def _filter_cohort_pdfs(reports: list[Report], companies: list[Company]) -> list[Report]:
+    """Keep direct-PDF reports whose complete listing identity is in the cohort."""
+    company_identities = {
+        (company.country, company.exchange, company.lei, company.isin, company.ticker)
+        for company in companies
+    }
+    return [
+        report for report in reports
+        if (report.country, report.exchange, report.lei, report.isin, report.ticker)
+        in company_identities
+    ]
 
 
 def parser() -> argparse.ArgumentParser:
@@ -391,18 +404,29 @@ def main(argv: list[str] | None = None) -> int:
             years = parse_years(args.years)
             sec_agent = os.getenv("SEC_USER_AGENT", "blackswan capital khanholdings127@gmail.com")
             manifest_path = args.state.parent / f"{args.universe.stem}_pdf_manifest.csv"
+            has_sec = any(bool(c.cik and c.cik.strip()) for c in companies)
+            has_uk = any(c.country == "GBR" for c in companies)
             with RunLock(args.state):
                 store = DiscoveryStore(args.state)
                 try:
                     store.add_universe(companies, years)
-                    archive = download_sec_bulk(args.cache / "sec" / "submissions.zip", sec_agent)
-                    discover_sec_bulk(store, archive)
-                    asyncio.run(discover_sec_history(store, archive, args.cache / "sec" / "history", sec_agent))
+                    if has_sec:
+                        archive = download_sec_bulk(args.cache / "sec" / "submissions.zip", sec_agent)
+                        discover_sec_bulk(store, archive)
+                        asyncio.run(discover_sec_history(store, archive, args.cache / "sec" / "history", sec_agent))
+                    if has_uk:
+                        from .fca_catalog import build_or_open_fca_catalog, discover_fca_candidates
+                        fca_map_zip = args.cache / "fca" / "mapping.zip"
+                        if not fca_map_zip.is_file() and Path("cache/fca/mapping.zip").is_file():
+                            fca_map_zip = Path("cache/fca/mapping.zip")
+                        fca_conn = build_or_open_fca_catalog(args.cache / "fca", fca_map_zip)
+                        discover_fca_candidates(store, fca_conn, company_keys)
+                        fca_conn.close()
                     export_pdf_manifest(store, manifest_path)
                 finally:
                     store.close()
             all_pdfs = load_manifest(manifest_path) if manifest_path.is_file() else []
-            cohort_pdfs = [r for r in all_pdfs if (r.country, r.lei, r.isin, r.ticker) in company_keys]
+            cohort_pdfs = _filter_cohort_pdfs(all_pdfs, companies)
             pdf_summary = {"downloaded": 0, "skipped": 0, "failed": 0}
             if cohort_pdfs:
                 settings = Settings(
@@ -422,17 +446,28 @@ def main(argv: list[str] | None = None) -> int:
                     if candidate.is_file():
                         chrome = candidate
                         break
-            render_summary = asyncio.run(render_sec_html(
-                args.state, args.output_root, args.cache, sec_agent,
-                chrome_path=chrome, network_workers=args.network_workers,
-                render_workers=args.render_workers, browser_processes=args.browser_processes,
-                company_keys=company_keys,
-            ))
+            render_summary = {"pdf_rendered": 0, "failed": 0}
+            if has_sec:
+                render_summary = asyncio.run(render_sec_html(
+                    args.state, args.output_root, args.cache, sec_agent,
+                    chrome_path=chrome, network_workers=args.network_workers,
+                    render_workers=args.render_workers, browser_processes=args.browser_processes,
+                    company_keys=company_keys,
+                ))
+            fca_render_summary = {"pdf_completed": 0, "failed": 0}
+            if has_uk:
+                fca_render_summary = asyncio.run(render_fca_originals(
+                    args.state, args.output_root, args.cache,
+                    chrome_path=chrome, network_workers=args.network_workers,
+                    render_workers=args.render_workers,
+                    company_keys=company_keys,
+                ))
             verify_summary = verify_store(args.output_root, args.state)
             result = {
                 "companies": len(companies),
                 "direct_pdf": pdf_summary,
                 "chromium_render": render_summary,
+                "fca_render": fca_render_summary,
                 "verify": verify_summary,
             }
             print(json.dumps(result, indent=2))
