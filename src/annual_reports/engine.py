@@ -120,8 +120,8 @@ def inspect_pdf(payload: bytes) -> int:
         with fitz.open(stream=payload, filetype="pdf") as document:
             if document.needs_pass:
                 raise TransferError("encrypted PDF requires a password", retryable=False)
-            if document.is_repaired or document.page_count < 1:
-                raise TransferError("PDF page tree is empty or repaired", retryable=False)
+            if document.page_count < 1:
+                raise TransferError("PDF page tree is empty", retryable=False)
             for page_number in range(document.page_count):
                 document.load_page(page_number)
             return document.page_count
@@ -310,8 +310,9 @@ async def _fetch_one(
                     raise TransferError("SEC_USER_AGENT is required for SEC redirects", retryable=False)
                 if family == "sec" and sec_blocked.is_set():
                     raise TransferError("SEC 403 circuit open; inspect User-Agent and access rate", retryable=False)
-                if family == "companies_house" and not settings.companies_house_key:
-                    raise TransferError("COMPANIES_HOUSE_API_KEY is required for Companies House redirects", retryable=False)
+                is_ch_api = host in {"api.company-information.service.gov.uk", "document-api.company-information.service.gov.uk"}
+                if is_ch_api and not settings.companies_house_key:
+                    raise TransferError("COMPANIES_HOUSE_API_KEY is required for Companies House API redirects", retryable=False)
                 if family:
                     await rate_gates[family].wait()
                 if family == "sec" and sec_blocked.is_set():
@@ -321,14 +322,14 @@ async def _fetch_one(
                     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 )
                 headers = {
-                    "Accept": "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+                    "Accept": "application/pdf" if family == "companies_house" else "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
                     "Accept-Encoding": "identity",
                     "User-Agent": settings.sec_user_agent if family == "sec" else default_ua,
                 }
-                auth = (settings.companies_house_key, "") if family == "companies_house" else None
+                auth = (settings.companies_house_key, "") if (is_ch_api and settings.companies_house_key) else None
                 async with session.stream(
                     "GET", current_url, headers=headers, auth=auth,
-                    timeout=max(settings.timeout_s, 30.0), allow_redirects=False,
+                    timeout=max(settings.timeout_s, 90.0), allow_redirects=False,
                     impersonate="chrome",
                 ) as response:
                     if response.status_code in {301, 302, 303, 307, 308}:
@@ -392,8 +393,9 @@ async def run(
         raise ValueError("AnnualReports.com hosted downloads require --authorized-hosted")
     if any(_rate_family(host) == "sec" for host in hosts) and not settings.sec_user_agent:
         raise ValueError("SEC_USER_AGENT must identify your organization and contact email")
-    if any(_rate_family(host) == "companies_house" for host in hosts) and not settings.companies_house_key:
-        raise ValueError("COMPANIES_HOUSE_API_KEY is required for Companies House URLs")
+    ch_api_hosts = {"api.company-information.service.gov.uk", "document-api.company-information.service.gov.uk"}
+    if any(host in ch_api_hosts for host in hosts) and not settings.companies_house_key:
+        raise ValueError("COMPANIES_HOUSE_API_KEY is required for Companies House API URLs")
 
     settings.output_root.mkdir(parents=True, exist_ok=True)
     lock = RunLock(settings.state_path)
@@ -437,8 +439,10 @@ async def run(
         initial_pending_count = len(pending)
 
         host_semaphores = {host: asyncio.Semaphore(settings.per_host) for host in hosts}
-        rate_gates = {"sec": RateGate(SEC_REQUEST_INTERVAL_S),
-                      "companies_house": RateGate(0.55)}
+        rate_gates: dict[str, Any] = {"sec": RateGate(SEC_REQUEST_INTERVAL_S)}
+        if any(_rate_family(h) == "companies_house" for h in hosts):
+            from .companies_house import PersistedRollingRateGate
+            rate_gates["companies_house"] = PersistedRollingRateGate(settings.state_path)
         sec_blocked = asyncio.Event()
         completed: list[Result] = []
         async with AsyncSession(max_clients=settings.workers) as session:

@@ -160,6 +160,33 @@ def parser() -> argparse.ArgumentParser:
     batch.add_argument("--network-workers", type=int, default=8)
     batch.add_argument("--render-workers", type=int, default=6)
     batch.add_argument("--browser-processes", type=int, default=3)
+
+    ch_m = commands.add_parser("ch-match", help="match UK companies to Companies House registration numbers")
+    ch_m.add_argument("universe", type=Path, nargs="?", help="optional universe CSV; defaults to UK companies in state")
+    ch_m.add_argument("--state", type=Path, default=Path("harvest.sqlite3"))
+    ch_m.add_argument("--api-key", default=os.getenv("COMPANIES_HOUSE_API_KEY", ""))
+    ch_m.add_argument("--limit", type=int)
+    ch_m.add_argument("--refresh", action="store_true")
+
+    ch_d = commands.add_parser("ch-discover", help="discover Companies House statutory accounts filings")
+    ch_d.add_argument("universe", type=Path, nargs="?", help="optional universe CSV")
+    ch_d.add_argument("--years", default="2017:2025")
+    ch_d.add_argument("--state", type=Path, default=Path("harvest.sqlite3"))
+    ch_d.add_argument("--output-root", type=Path, default=Path("GLOBAL_SUSTAINABILITY_DATABASE"))
+    ch_d.add_argument("--api-key", default=os.getenv("COMPANIES_HOUSE_API_KEY", ""))
+    ch_d.add_argument("--limit-companies", type=int)
+
+    ch_r = commands.add_parser("ch-review", help="export Companies House matching and accounts filing review items to CSV")
+    ch_r.add_argument("universe", type=Path, nargs="?", help="optional universe CSV")
+    ch_r.add_argument("--state", type=Path, default=Path("harvest.sqlite3"))
+    ch_r.add_argument("--output", type=Path, default=Path("ch-review.csv"))
+
+    ch_e = commands.add_parser("ch-export-manifest", help="export verified direct-PDF candidates from Companies House to CSV manifest")
+    ch_e.add_argument("universe", type=Path, nargs="?", help="optional universe CSV")
+    ch_e.add_argument("--years", default="2017:2025")
+    ch_e.add_argument("--state", type=Path, default=Path("harvest.sqlite3"))
+    ch_e.add_argument("--output-root", type=Path, default=Path("GLOBAL_SUSTAINABILITY_DATABASE"))
+    ch_e.add_argument("--output", type=Path, default=Path("ch-direct.csv"))
     return cli
 
 
@@ -200,6 +227,42 @@ def main(argv: list[str] | None = None) -> int:
             summary = ingest_zip(args.archive, args.index, args.output_root, args.state)
             print(json.dumps(summary, indent=2))
             return 0 if not summary.get("failed") else 1
+        if args.command == "ch-match":
+            companies = read_universe(args.universe) if args.universe else None
+            from .companies_house import match_uk_companies
+            summary = asyncio.run(match_uk_companies(
+                args.state, companies=companies, api_key=args.api_key,
+                limit=args.limit, refresh=args.refresh,
+            ))
+            print(json.dumps(summary, indent=2))
+            return 0
+        if args.command == "ch-discover":
+            companies = read_universe(args.universe) if args.universe else None
+            years = parse_years(args.years)
+            from .companies_house import discover_ch_accounts
+            summary = asyncio.run(discover_ch_accounts(
+                args.state, years=years, output_root=args.output_root,
+                companies=companies, api_key=args.api_key,
+                limit_companies=args.limit_companies,
+            ))
+            print(json.dumps(summary, indent=2))
+            return 0
+        if args.command == "ch-review":
+            companies = read_universe(args.universe) if args.universe else None
+            from .companies_house import export_ch_review
+            summary = export_ch_review(args.state, args.output, companies=companies)
+            print(json.dumps(summary, indent=2))
+            return 0
+        if args.command == "ch-export-manifest":
+            companies = read_universe(args.universe) if args.universe else None
+            years = parse_years(args.years) if args.years else None
+            from .companies_house import export_ch_manifest
+            count = export_ch_manifest(
+                args.state, args.output, output_root=args.output_root,
+                companies=companies, years=years,
+            )
+            print(json.dumps({"manifest": str(args.output), "pdf_rows": count}, indent=2))
+            return 0
         if args.command == "benchmark":
             if args.limit < 1:
                 raise ValueError("limit must be positive")

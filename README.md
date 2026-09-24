@@ -71,6 +71,31 @@ Export UK NSM search results as CSV from the [FCA search interface](https://www.
 
 For historic Morningstar NSM links, download the [FCA migration mapping ZIP](https://data.fca.org.uk/artefacts/NSM/data-migration/MS_to_FCA_NSM_Document_URL_Mapping.zip) to `cache/fca/mapping.zip` and run `import-fca-map`. The default streams the 2017–2020 CSVs and stores only mappings needed by your candidate catalog; `--all` stores every mapping and needs much more disk space.
 
+### UK statutory accounts discovery via Companies House (2020–2025)
+
+To fill missing UK company-years (especially 2020–2025 where FCA NSM migration archives cut off), discover official statutory accounts from Companies House:
+
+```powershell
+$env:COMPANIES_HOUSE_API_KEY = "your_ch_api_key"
+# 1. Multi-factor company matching (validates legal name, CRN, PLC vs Ltd, active status)
+ar-harvest ch-match --state local/harvest.sqlite3
+
+# 2. Statutory accounts discovery (extracts period-end FY, filters dormant/micro/abbreviated/filleted)
+ar-harvest ch-discover --years 2017:2025 --state local/harvest.sqlite3 --output-root "GLOBAL_SUSTAINABILITY_DATABASE"
+
+# 3. Export review audit log for unconfirmed subtypes, name collisions, or amended filings
+ar-harvest ch-review --state local/harvest.sqlite3 --output ch-review.csv
+
+# 4. Export direct PDF manifest for missing slots only (never overwriting existing canonical PDFs)
+ar-harvest ch-export-manifest --years 2017:2025 --state local/harvest.sqlite3 --output-root "GLOBAL_SUSTAINABILITY_DATABASE" --output ch-direct.csv
+
+# 5. Execute rate-gated concurrent transfer into Google Drive
+ar-harvest run ch-direct.csv --state local/harvest.sqlite3 --output-root "GLOBAL_SUSTAINABILITY_DATABASE" --workers 8 --per-host 2
+```
+
+All Companies House API and document requests share a persisted rolling rate gate (maximum 600 requests per 5 minutes) tracked in SQLite `ch_rate_budget`. Basic auth credentials are sent strictly to official Companies House API hosts and automatically stripped when following redirects to external S3 storage.
+
+
 SEC HTML filings are discovered but omitted from the direct-PDF manifest. Render those separately:
 
 ```powershell
