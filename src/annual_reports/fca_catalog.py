@@ -168,7 +168,18 @@ def discover_fca_candidates(
         if not expected_years:
             continue
 
-        results = query_fca_catalog(catalog_conn, company.company_name, company.ticker, list(expected_years))
+        names_to_try = [company.company_name]
+        if company.aliases:
+            for a in re.split(r"[;,]", company.aliases):
+                a_clean = a.strip()
+                if a_clean and a_clean not in names_to_try:
+                    names_to_try.append(a_clean)
+
+        results = []
+        for n in names_to_try:
+            results = query_fca_catalog(catalog_conn, n, company.ticker, list(expected_years))
+            if results:
+                break
         seen_years = set()
 
         for item in results:

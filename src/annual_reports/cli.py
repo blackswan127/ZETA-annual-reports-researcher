@@ -462,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                     render_workers=args.render_workers,
                     company_keys=company_keys,
                 ))
-            verify_summary = verify_store(args.output_root, args.state)
+            verify_summary = verify_store(args.output_root, args.state, company_keys, False)
             result = {
                 "companies": len(companies),
                 "direct_pdf": pdf_summary,

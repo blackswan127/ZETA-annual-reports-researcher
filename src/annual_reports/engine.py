@@ -31,7 +31,7 @@ _PART_NAME = re.compile(r"\.pdf\.[0-9a-f]{32}\.part$")
 
 def native_path(path: Path) -> str:
     """Enable Windows extended paths for deeply nested SOP filenames."""
-    value = str(path.resolve())
+    value = os.path.abspath(str(path))
     if os.name == "nt" and len(value) >= 240 and not value.startswith("\\\\?\\"):
         return "\\\\?\\" + value
     return value
@@ -85,8 +85,19 @@ class RunLock:
         self.release()
 
 
-def cleanup_orphan_parts(root: Path) -> int:
+def cleanup_orphan_parts(root: Path, target_dirs: set[str] | None = None) -> int:
     removed = 0
+    if target_dirs is not None:
+        for d in target_dirs:
+            if os.path.isdir(d):
+                for name in os.listdir(d):
+                    if _PART_NAME.search(name):
+                        try:
+                            os.unlink(os.path.join(d, name))
+                            removed += 1
+                        except OSError:
+                            pass
+        return removed
     for folder, _, files in os.walk(native_path(root)):
         for name in files:
             if _PART_NAME.search(name):
@@ -388,7 +399,8 @@ async def run(
     lock = RunLock(settings.state_path)
     lock.acquire()
     try:
-        orphan_parts_removed = cleanup_orphan_parts(settings.output_root)
+        target_dirs = {native_path(settings.output_root)} | {native_path((settings.output_root / r.relative_path).parent) for r in reports}
+        orphan_parts_removed = cleanup_orphan_parts(settings.output_root, target_dirs)
         state = StateStore(settings.state_path)
     except Exception:
         lock.release()
@@ -497,20 +509,37 @@ async def run(
         lock.release()
 
 
-def verify_store(output_root: Path, state_path: Path) -> dict:
+def verify_store(output_root: Path, state_path: Path, company_keys: set[str] | None = None, deep: bool = True) -> dict:
     connection = sqlite3.connect(state_path)
     errors: list[str] = []
     checked = 0
     seen_content: dict[tuple[str, str], str] = {}
+    target_leis = {k.split('|')[2] for k in company_keys if len(k.split('|')) >= 3} if company_keys is not None else None
+    parts = []
     try:
         for relative, expected_bytes, expected_pages, expected_sha in connection.execute(
             "SELECT relative_path, bytes, pages, sha256 FROM reports WHERE status='downloaded'"
         ):
+            if target_leis is not None:
+                p_parts = Path(relative).parts
+                lei = p_parts[2].split('_')[0] if len(p_parts) >= 3 else ""
+                if lei not in target_leis:
+                    continue
             path = output_root / relative
-            if not os.path.isfile(native_path(path)):
+            native_p = native_path(path)
+            if not os.path.isfile(native_p):
                 errors.append(f"missing: {relative}")
                 continue
-            with open(native_path(path), "rb") as stream:
+            if not deep:
+                actual_bytes = os.path.getsize(native_p)
+                if actual_bytes != expected_bytes:
+                    errors.append(f"mismatch: {relative}")
+                checked += 1
+                part_file = native_p + ".part"
+                if os.path.isfile(part_file):
+                    parts.append(part_file)
+                continue
+            with open(native_p, "rb") as stream:
                 raw = stream.read()
             try:
                 pages = inspect_pdf(raw)
@@ -526,10 +555,14 @@ def verify_store(output_root: Path, state_path: Path) -> dict:
             else:
                 seen_content[identity] = relative
             checked += 1
+            part_file = native_p + ".part"
+            if os.path.isfile(part_file):
+                parts.append(part_file)
     finally:
         connection.close()
-    parts = [os.path.join(folder, name)
-             for folder, _, files in os.walk(native_path(output_root))
-             for name in files if name.endswith(".part")]
-    errors.extend(f"orphaned part: {path}" for path in parts)
+    if target_leis is None:
+        parts = [os.path.join(folder, name)
+                 for folder, _, files in os.walk(native_path(output_root))
+                 for name in files if name.endswith(".part")]
+    errors.extend(f"orphaned part: {p}" for p in parts)
     return {"checked": checked, "errors": errors, "ok": not errors}

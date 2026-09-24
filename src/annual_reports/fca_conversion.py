@@ -324,7 +324,10 @@ async def render_fca_originals(
                         await render_queue.put(None)
                     await render_queue.join()
                     await asyncio.gather(*render_tasks)
-                    await browser.close()
+                    try:
+                        await asyncio.wait_for(browser.close(), timeout=5.0)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
         finally:
             ledger.close()
         elapsed = round(time.monotonic() - started, 3)
