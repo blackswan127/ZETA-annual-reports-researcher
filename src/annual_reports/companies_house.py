@@ -835,7 +835,7 @@ def get_existing_verified_slots(
     has_reports = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'").fetchone() is not None
     if has_reports:
         for rel_path, verified, status in conn.execute(
-            "SELECT relative_path, verified, status FROM reports WHERE status='downloaded' OR verified=1"
+            "SELECT relative_path, verified, status FROM reports WHERE status='downloaded'"
         ):
             norm = rel_path.replace("\\", "/")
             parts = norm.split("/")
