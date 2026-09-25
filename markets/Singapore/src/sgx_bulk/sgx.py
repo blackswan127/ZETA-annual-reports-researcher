@@ -38,6 +38,11 @@ class SGXSource:
             for row in metadata
             if CODE_RE.fullmatch(str(row.get("stockCode", "")).upper())
         }
+        by_ibm = {
+            str(row.get("ibmCode", "")).upper(): row
+            for row in metadata
+            if CODE_RE.fullmatch(str(row.get("ibmCode", "")).upper())
+        }
         # SGX's securities feed is a counter feed, not a complete issuer
         # directory: trusts and other listed reporting entities can be absent.
         # Corporate Information is the issuer roster; use live counters when
@@ -52,7 +57,7 @@ class SGXSource:
             stock = str(row.get("nc", "")).upper()
             if not CODE_RE.fullmatch(stock):
                 continue
-            meta = by_stock.get(stock)
+            meta = by_stock.get(stock) or by_ibm.get(stock)
             if not meta:
                 continue
             ibm = str(meta.get("ibmCode", "")).upper()
@@ -60,7 +65,8 @@ class SGXSource:
             if not CODE_RE.fullmatch(ibm) or not name:
                 continue
             short = " ".join(str(row.get("n", "")).split())
-            out.setdefault(ibm, Issuer(ibm, stock, name, short, str(row.get("m", "")).upper()))
+            isin = str(meta.get("isinCode", "")).strip().upper()
+            out.setdefault(ibm, Issuer(ibm, stock, name, short, str(row.get("m", "")).upper(), isin=isin))
 
         for profile in profile_rows:
             market = str(profile.get("market", "")).strip().upper()
@@ -70,14 +76,16 @@ class SGXSource:
             name = " ".join(str(profile.get("companyName", "")).split())
             if not CODE_RE.fullmatch(ibm) or not name:
                 continue
+            meta = by_ibm.get(ibm) or by_stock.get(ibm)
+            isin = str(meta.get("isinCode", "")).strip().upper() if meta else ""
             if ibm in out:
                 # Corporate Information gives the official issuer name.
                 current = out[ibm]
-                out[ibm] = Issuer(ibm, current.stock_code, name, current.short_name or name, market)
+                out[ibm] = Issuer(ibm, current.stock_code, name, current.short_name or name, market, isin=current.isin or isin)
                 continue
             # Do not borrow a historical counter from the all-time metadata
             # table; the issuer code is the stable identifier for this row.
-            out[ibm] = Issuer(ibm, ibm, name, name, market)
+            out[ibm] = Issuer(ibm, ibm, name, name, market, isin=isin)
         return sorted(out.values(), key=lambda i: i.stock_code)
 
     async def _corporate_information_rows(self, page_size: int = 100) -> list[dict[str, Any]]:
@@ -176,6 +184,19 @@ class SGXSource:
     def is_annual(row: dict[str, Any]) -> bool:
         return str(row.get("title", "")).strip().casefold() == "annual report"
 
+    @staticmethod
+    def is_sustainability(row: dict[str, Any]) -> bool:
+        title = str(row.get("title", "")).strip().casefold()
+        return "sustainability report" in title or "esg report" in title
+
+    @classmethod
+    def report_type_from_row(cls, row: dict[str, Any]) -> str | None:
+        if cls.is_annual(row):
+            return "AR"
+        if cls.is_sustainability(row):
+            return "SR"
+        return None
+
     @classmethod
     def map_row(cls, row: dict[str, Any], alias_index: dict[str, list[Issuer]]) -> tuple[Issuer | None, str]:
         for field in ("companyName", "securityName"):
@@ -189,8 +210,9 @@ class SGXSource:
         return None, "no-current-issuer-name-match"
 
     @classmethod
-    def filing_from_row(cls, row: dict[str, Any], issuer: Issuer) -> Filing | None:
-        if not cls.is_annual(row):
+    def filing_from_row(cls, row: dict[str, Any], issuer: Issuer, report_type: str | None = None) -> Filing | None:
+        rtype = report_type or cls.report_type_from_row(row)
+        if not rtype:
             return None
         ann = str(row.get("id", "")).strip().upper()
         if not ANN_RE.fullmatch(ann):
@@ -210,13 +232,18 @@ class SGXSource:
             period_end=period,
             broadcast_at=broadcast.astimezone(UTC),
             detail_url=detail,
+            title=str(row.get("title", "")).strip() or ("Annual Report" if rtype == "AR" else "Sustainability Report"),
+            report_type=rtype,
         )
 
     async def resolve_attachments(self, filing: Filing) -> tuple[list[Attachment], set[str]]:
         r = await self.http.request("GET", filing.detail_url)
         links = safe_pdf_links(r.text, filing.detail_url)
         attachments = [
-            Attachment(filing.announcement_id, url, filename, attachment_score(filename, filing.fiscal_year))
+            Attachment(
+                filing.announcement_id, url, filename,
+                attachment_score(filename, filing.fiscal_year, filing.report_type)
+            )
             for url, filename in links
         ]
         if not attachments:

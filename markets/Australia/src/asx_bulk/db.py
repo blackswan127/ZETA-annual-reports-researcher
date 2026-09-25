@@ -38,17 +38,19 @@ CREATE TABLE IF NOT EXISTS filings (
   year_method TEXT,
   score INTEGER NOT NULL,
   pdf_url TEXT,
+  report_type TEXT NOT NULL DEFAULT 'AR',
   selected INTEGER NOT NULL DEFAULT 0,
   UNIQUE (ticker, announcement_id)
 );
 CREATE TABLE IF NOT EXISTS expected_slots (
   ticker TEXT NOT NULL,
   fiscal_year INTEGER NOT NULL,
+  report_type TEXT NOT NULL DEFAULT 'AR',
   status TEXT NOT NULL DEFAULT 'MISSING',
   selected_filing_id INTEGER,
   candidate_count INTEGER NOT NULL DEFAULT 0,
   note TEXT,
-  PRIMARY KEY (ticker, fiscal_year)
+  PRIMARY KEY (ticker, fiscal_year, report_type)
 );
 CREATE TABLE IF NOT EXISTS downloads (
   filing_id INTEGER PRIMARY KEY,
@@ -71,6 +73,30 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        try:
+            self.conn.execute("ALTER TABLE filings ADD COLUMN report_type TEXT NOT NULL DEFAULT 'AR'")
+        except sqlite3.OperationalError:
+            pass
+        # Check if expected_slots has composite PK (ticker, fiscal_year, report_type)
+        cur = self.conn.execute("PRAGMA table_info(expected_slots)")
+        pk_cols = [r["name"] for r in cur.fetchall() if r["pk"] > 0]
+        if "report_type" not in pk_cols:
+            self.conn.executescript("""
+                CREATE TABLE IF NOT EXISTS expected_slots_v2 (
+                  ticker TEXT NOT NULL,
+                  fiscal_year INTEGER NOT NULL,
+                  report_type TEXT NOT NULL DEFAULT 'AR',
+                  status TEXT NOT NULL DEFAULT 'MISSING',
+                  selected_filing_id INTEGER,
+                  candidate_count INTEGER NOT NULL DEFAULT 0,
+                  note TEXT,
+                  PRIMARY KEY (ticker, fiscal_year, report_type)
+                );
+                INSERT OR IGNORE INTO expected_slots_v2(ticker, fiscal_year, report_type, status, selected_filing_id, candidate_count, note)
+                SELECT ticker, fiscal_year, COALESCE(report_type, 'AR'), status, selected_filing_id, candidate_count, note FROM expected_slots;
+                DROP TABLE expected_slots;
+                ALTER TABLE expected_slots_v2 RENAME TO expected_slots;
+            """)
 
     def close(self):
         self.conn.close()
@@ -92,7 +118,7 @@ class Database:
     def init_slots(self, start_year: int, end_year: int) -> None:
         rows = self.conn.execute("SELECT ticker FROM issuers WHERE active=1").fetchall()
         self.conn.executemany(
-            "INSERT OR IGNORE INTO expected_slots(ticker,fiscal_year) VALUES(?,?)",
+            "INSERT OR IGNORE INTO expected_slots(ticker,fiscal_year,report_type) VALUES(?,?,'AR')",
             [(r[0], y) for r in rows for y in range(start_year, end_year + 1)],
         )
         self.conn.commit()
@@ -114,14 +140,15 @@ class Database:
     def add_filings(self, filings: list[Filing]) -> None:
         self.conn.executemany(
             """INSERT INTO filings(ticker,published_date,title,display_url,announcement_id,pages,size_text,
-               source_year,fiscal_year,year_method,score,pdf_url)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+               source_year,fiscal_year,year_method,score,pdf_url,report_type)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(ticker,announcement_id) DO UPDATE SET
                  title=excluded.title,pages=excluded.pages,size_text=excluded.size_text,
-                 fiscal_year=excluded.fiscal_year,year_method=excluded.year_method,score=excluded.score""",
+                 fiscal_year=excluded.fiscal_year,year_method=excluded.year_method,
+                 score=excluded.score,report_type=excluded.report_type""",
             [
                 (f.ticker, f.published_date.isoformat(), f.title, f.display_url, f.announcement_id,
-                 f.pages, f.size_text, f.source_year, f.fiscal_year, f.year_method, f.score, f.pdf_url)
+                 f.pages, f.size_text, f.source_year, f.fiscal_year, f.year_method, f.score, f.pdf_url, f.report_type)
                 for f in filings
             ],
         )
@@ -129,24 +156,31 @@ class Database:
 
     def select_best(self, start_year: int, end_year: int) -> None:
         self.conn.execute("UPDATE filings SET selected=0")
+        self.conn.execute(
+            """INSERT OR IGNORE INTO expected_slots(ticker,fiscal_year,report_type)
+               SELECT DISTINCT ticker,fiscal_year,report_type FROM filings
+               WHERE report_type != 'AR' AND fiscal_year BETWEEN ? AND ?""",
+            (start_year, end_year),
+        )
         slots = self.conn.execute(
-            """SELECT e.ticker,e.fiscal_year FROM expected_slots e
+            """SELECT e.ticker,e.fiscal_year,COALESCE(e.report_type,'AR') report_type FROM expected_slots e
                JOIN issuers i ON i.ticker=e.ticker AND i.active=1
                WHERE e.fiscal_year BETWEEN ? AND ?""",
             (start_year, end_year),
         ).fetchall()
         for slot in slots:
-            ticker, fy = slot[0], slot[1]
+            ticker, fy, rep_type = slot[0], slot[1], slot[2]
             candidates = self.conn.execute(
                 """SELECT id,score,pages,published_date,year_method,title FROM filings
-                   WHERE ticker=? AND fiscal_year=?
+                   WHERE ticker=? AND fiscal_year=? AND report_type=?
                    ORDER BY score DESC, COALESCE(pages,0) DESC, published_date DESC""",
-                (ticker, fy),
+                (ticker, fy, rep_type),
             ).fetchall()
             if not candidates:
                 self.conn.execute(
-                    "UPDATE expected_slots SET status='MISSING',selected_filing_id=NULL,candidate_count=0,note='' WHERE ticker=? AND fiscal_year=?",
-                    (ticker, fy),
+                    """UPDATE expected_slots SET status='MISSING',selected_filing_id=NULL,candidate_count=0,note=''
+                       WHERE ticker=? AND fiscal_year=? AND report_type=?""",
+                    (ticker, fy, rep_type),
                 )
                 continue
             best = candidates[0]
@@ -158,8 +192,8 @@ class Database:
                 note = (note + ";" if note else "") + "heuristic_year"
             self.conn.execute(
                 """UPDATE expected_slots SET status='FOUND',selected_filing_id=?,candidate_count=?,note=?
-                   WHERE ticker=? AND fiscal_year=?""",
-                (best[0], len(candidates), note, ticker, fy),
+                   WHERE ticker=? AND fiscal_year=? AND report_type=?""",
+                (best[0], len(candidates), note, ticker, fy, rep_type),
             )
             self.conn.execute("INSERT OR IGNORE INTO downloads(filing_id,status) VALUES(?,'PENDING')", (best[0],))
         self.conn.commit()
@@ -201,15 +235,15 @@ class Database:
         queries = {
             "issuers.csv": "SELECT * FROM issuers ORDER BY ticker",
             "filings.csv": "SELECT * FROM filings ORDER BY ticker,fiscal_year,published_date",
-            "coverage.csv": """SELECT e.ticker,i.name,e.fiscal_year,e.status,e.candidate_count,e.note,
+            "coverage.csv": """SELECT e.ticker,i.name,e.fiscal_year,COALESCE(e.report_type,'AR') report_type,e.status,e.candidate_count,e.note,
                 f.title,f.published_date,f.display_url,f.pdf_url,d.path,d.bytes,d.sha256,d.last_error
                 FROM expected_slots e JOIN issuers i USING(ticker)
                 LEFT JOIN filings f ON f.id=e.selected_filing_id
                 LEFT JOIN downloads d ON d.filing_id=f.id
                 WHERE i.active=1
-                ORDER BY e.ticker,e.fiscal_year""",
-            "missing.csv": """SELECT e.ticker,i.name,e.fiscal_year,e.status,e.note FROM expected_slots e
-                JOIN issuers i USING(ticker) WHERE i.active=1 AND e.status IN ('MISSING','FAILED') ORDER BY e.ticker,e.fiscal_year""",
+                ORDER BY e.ticker,e.fiscal_year,e.report_type""",
+            "missing.csv": """SELECT e.ticker,i.name,e.fiscal_year,COALESCE(e.report_type,'AR') report_type,e.status,e.note FROM expected_slots e
+                JOIN issuers i USING(ticker) WHERE i.active=1 AND e.status IN ('MISSING','FAILED') ORDER BY e.ticker,e.fiscal_year,e.report_type""",
             "multiple_candidates.csv": """SELECT e.ticker,i.name,e.fiscal_year,e.candidate_count,e.note
                 FROM expected_slots e JOIN issuers i USING(ticker) WHERE i.active=1 AND e.candidate_count>1 ORDER BY e.ticker,e.fiscal_year""",
             "heuristic_years.csv": """SELECT e.ticker,i.name,e.fiscal_year,f.title,f.published_date,f.year_method

@@ -12,6 +12,7 @@ class Issuer:
     issuer_name: str
     short_name: str
     market: str
+    isin: str = ""
 
     @property
     def ticker(self) -> str:
@@ -30,6 +31,7 @@ class Filing:
     broadcast_at: datetime
     detail_url: str
     title: str = "Annual Report"
+    report_type: str = "AR"
 
 
 @dataclass(frozen=True)

@@ -62,9 +62,31 @@ def safe_pdf_links(html: str, detail_url: str) -> list[tuple[str, str]]:
     return out
 
 
-def attachment_score(filename: str, fiscal_year: int | None = None) -> int:
+def attachment_score(filename: str, fiscal_year: int | None = None, report_type: str = "AR") -> int:
     n = re.sub(r"[^a-z0-9]+", "", filename.casefold())
     score = 0
+    clean_type = report_type.strip().upper()
+    if clean_type == "SR":
+        if "sustainabilityreport" in n:
+            score += 130
+        elif "sustainability" in n or "sustainable" in n:
+            score += 100
+        elif "esg" in n or "csr" in n:
+            score += 90
+        elif "climate" in n or "tcfd" in n or "gri" in n:
+            score += 70
+        if fiscal_year and str(fiscal_year) in filename:
+            score += 20
+        if "annualreport" in n and "sustain" not in n:
+            score -= 100
+        reject = (
+            "appendix", "circular", "proxy", "agm",
+            "notice", "letter", "requestform", "informationstatement",
+        )
+        if any(term in n for term in reject):
+            score -= 150
+        return score
+
     if "annualreport" in n:
         score += 120
     elif re.search(r"(?:^|[^a-z])ar\s*20\d{2}", filename.casefold()):

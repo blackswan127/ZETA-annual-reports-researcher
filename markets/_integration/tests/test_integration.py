@@ -46,6 +46,13 @@ def test_market_resolution():
         ("NZX", "NZL", "XNZE"),
         ("Singapore", "SGP", "XSES"),
         ("SGX", "SGP", "XSES"),
+        ("SriLanka", "LKA", "XCOL"),
+        ("CSE", "LKA", "XCOL"),
+        ("COLOMBO", "LKA", "XCOL"),
+        ("Africa", "ZAF", "XJSE"),
+        ("SouthAfrica", "ZAF", "XJSE"),
+        ("Nigeria", "ZAF", "XJSE"),
+        ("Kenya", "ZAF", "XJSE"),
     ]
     for raw, exp_iso3, exp_mic in cases:
         info = resolve_market_info(raw)
@@ -216,3 +223,30 @@ def test_plain_english_directive_parsing():
     assert res3["market"] == "Singapore"
     assert res3["count"] == 50
     assert res3["fiscal_years"] == [2023]
+
+
+def test_get_market_adapter_srilanka():
+    from markets._integration.adapters import get_market_adapter, SriLankaAdapter
+    adapter = get_market_adapter("SriLanka")
+    assert isinstance(adapter, SriLankaAdapter)
+    adapter_cse = get_market_adapter("CSE")
+    assert isinstance(adapter_cse, SriLankaAdapter)
+    assert adapter.info["iso3"] == "LKA"
+    assert adapter.info["mic"] == "XCOL"
+
+
+def test_get_market_adapter_africa():
+    from markets._integration.adapters import get_market_adapter, AfricaAdapter
+    adapter = get_market_adapter("Africa")
+    assert isinstance(adapter, AfricaAdapter)
+    adapter_jse = get_market_adapter("SouthAfrica")
+    assert isinstance(adapter_jse, AfricaAdapter)
+    adapter_ngx = get_market_adapter("Nigeria")
+    assert isinstance(adapter_ngx, AfricaAdapter)
+
+    # Test directive parsing
+    res = parse_plain_english_directive("harvest 20 companies from Nigeria for FY2023")
+    assert res["market"] == "Africa"
+    assert res["count"] == 20
+    assert res["fiscal_years"] == [2023]
+

@@ -45,19 +45,21 @@ def build_sop_relative_path(
     ticker: str,
     fiscal_year: int,
     lang: str = "EN",
+    report_type: str = "AR",
 ) -> Path:
     """Generate canonical SOP relative path:
-    <ISO3>/<MIC>/<LEI>_<ISIN>_<Ticker>/FYyyyy/<LEI>_<ISO3>_<MIC>_<Ticker>_<ISIN>_FYyyyy_AR_EN.pdf
+    <ISO3>/<MIC>/<LEI>_<ISIN>_<Ticker>/FYyyyy/<LEI>_<ISO3>_<MIC>_<Ticker>_<ISIN>_FYyyyy_<ReportType>_<Language>.pdf
     """
     clean_iso3 = iso3.strip().upper()
     clean_mic = mic.strip().upper()
     clean_lei = lei.strip().upper()
     clean_isin = isin.strip().upper()
     clean_ticker = sanitize_token(ticker).upper()
+    clean_report_type = report_type.strip().upper()
     clean_lang = lang.strip().upper()
     fy_folder = f"FY{fiscal_year}"
     company_folder = f"{clean_lei}_{clean_isin}_{clean_ticker}"
-    filename = f"{clean_lei}_{clean_iso3}_{clean_mic}_{clean_ticker}_{clean_isin}_FY{fiscal_year}_AR_{clean_lang}.pdf"
+    filename = f"{clean_lei}_{clean_iso3}_{clean_mic}_{clean_ticker}_{clean_isin}_FY{fiscal_year}_{clean_report_type}_{clean_lang}.pdf"
     return Path(clean_iso3) / clean_mic / company_folder / fy_folder / filename
 
 
@@ -139,6 +141,7 @@ def promote_pdf_to_corpus(
     lei: str = "",
     isin: str = "",
     lang: str = "EN",
+    report_type: str = "AR",
 ) -> Tuple[str, str, Path]:
     """Promote a validated PDF file to GLOBAL_SUSTAINABILITY_DATABASE or local staging.
     Returns: (status, reason, final_path)
@@ -166,7 +169,8 @@ def promote_pdf_to_corpus(
     if not (valid_lei and valid_isin):
         # Stage locally
         clean_ticker = sanitize_token(ticker)
-        staged_rel = Path("unresolved_identity") / iso3 / mic / f"{clean_ticker}_FY{fiscal_year}" / f"{clean_ticker}_FY{fiscal_year}_AR_{lang}.pdf"
+        clean_report_type = report_type.strip().upper()
+        staged_rel = Path("unresolved_identity") / iso3 / mic / f"{clean_ticker}_FY{fiscal_year}" / f"{clean_ticker}_FY{fiscal_year}_{clean_report_type}_{lang}.pdf"
         target_path = staging_root / staged_rel
         target_ext = to_extended_path(target_path)
         target_ext.parent.mkdir(parents=True, exist_ok=True)
@@ -177,7 +181,7 @@ def promote_pdf_to_corpus(
         return "STAGED_UNRESOLVED_IDENTITY", "; ".join(missing_reasons), target_path
 
     # Identity complete: target is GLOBAL_SUSTAINABILITY_DATABASE
-    sop_rel = build_sop_relative_path(iso3, mic, lei, isin, ticker, fiscal_year, lang)
+    sop_rel = build_sop_relative_path(iso3, mic, lei, isin, ticker, fiscal_year, lang=lang, report_type=report_type)
     dest_path = output_root / sop_rel
     dest_ext = to_extended_path(dest_path)
 

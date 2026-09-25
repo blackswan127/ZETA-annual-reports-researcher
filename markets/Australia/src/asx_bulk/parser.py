@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .classifier import annual_score, infer_fiscal_year, normalize_title
+from .classifier import annual_score, classify_filing, infer_fiscal_year, normalize_title
 from .models import Filing
 
 BASE = "https://www.asx.com.au"
@@ -53,8 +53,8 @@ def parse_announcements_html(html: str, ticker: str, source_year: int) -> list[F
         announcement_id = (qs.get("idsId") or [""])[0]
         if not announcement_id:
             continue
-        score = annual_score(title, pages)
-        if score < 0:
+        report_type, score = classify_filing(title, pages)
+        if score < 0 or not report_type:
             continue
         fy, method = infer_fiscal_year(title, published)
         out.append(
@@ -70,6 +70,7 @@ def parse_announcements_html(html: str, ticker: str, source_year: int) -> list[F
                 fiscal_year=fy,
                 year_method=method,
                 score=score,
+                report_type=report_type,
             )
         )
     return out

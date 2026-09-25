@@ -108,7 +108,11 @@ class Pipeline:
                 if not row["pdf_url"]:
                     self.db.set_pdf_url(filing_id, pdf_url)
                 company_dir = f"{row['ticker']}_{safe_name(row['name'], 70)}"
-                filename = f"{row['ticker']}_{row['fiscal_year']}_Annual_Report.pdf"
+                rep_type = (row["report_type"] if "report_type" in row.keys() else "AR") or "AR"
+                if rep_type == "AR":
+                    filename = f"{row['ticker']}_{row['fiscal_year']}_Annual_Report.pdf"
+                else:
+                    filename = f"{row['ticker']}_{row['fiscal_year']}_{rep_type}_Report.pdf"
                 dest = self.s.pdf_root / company_dir / str(row["fiscal_year"]) / filename
                 if dest.exists():
                     from .util import is_pdf, sha256_file

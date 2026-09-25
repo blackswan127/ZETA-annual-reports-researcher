@@ -34,13 +34,49 @@ def write_audits(db_path: Path, out_dir: Path, start_year: int, end_year: int) -
     coverage_path = out_dir / "coverage.csv"
     issuers = conn.execute("SELECT ibm_code,stock_code,ticker,issuer_name FROM issuers ORDER BY stock_code").fetchall()
     with coverage_path.open("w", newline="", encoding="utf-8-sig") as f:
-        fields = ["ibm_code","stock_code","ticker","issuer_name","fiscal_year","filing_count","downloaded_count","status"]
-        w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
+        fields = [
+            "ibm_code", "stock_code", "ticker", "issuer_name", "fiscal_year",
+            "ar_filings", "ar_downloaded", "sr_filings", "sr_downloaded", "status"
+        ]
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
         for issuer in issuers:
             for year in range(start_year, end_year + 1):
-                filing_count = conn.execute("SELECT COUNT(*) FROM filings WHERE ibm_code=? AND fiscal_year=?", (issuer["ibm_code"], year)).fetchone()[0]
-                downloaded = conn.execute("""SELECT COUNT(*) FROM attachments a JOIN filings f USING(announcement_id)
-                    WHERE f.ibm_code=? AND f.fiscal_year=? AND a.selected=1 AND a.status='done'""", (issuer["ibm_code"], year)).fetchone()[0]
-                status = "DOWNLOADED" if downloaded else ("FOUND_NOT_DOWNLOADED" if filing_count else "NO_FILING_FOUND")
-                w.writerow({**dict(issuer), "fiscal_year":year, "filing_count":filing_count, "downloaded_count":downloaded, "status":status})
+                ar_filing = conn.execute(
+                    "SELECT COUNT(*) FROM filings WHERE ibm_code=? AND fiscal_year=? AND report_type='AR'",
+                    (issuer["ibm_code"], year)
+                ).fetchone()[0]
+                ar_done = conn.execute("""
+                    SELECT COUNT(*) FROM attachments a JOIN filings f USING(announcement_id)
+                    WHERE f.ibm_code=? AND f.fiscal_year=? AND f.report_type='AR' AND a.selected=1 AND a.status='done'
+                """, (issuer["ibm_code"], year)).fetchone()[0]
+                sr_filing = conn.execute(
+                    "SELECT COUNT(*) FROM filings WHERE ibm_code=? AND fiscal_year=? AND report_type='SR'",
+                    (issuer["ibm_code"], year)
+                ).fetchone()[0]
+                sr_done = conn.execute("""
+                    SELECT COUNT(*) FROM attachments a JOIN filings f USING(announcement_id)
+                    WHERE f.ibm_code=? AND f.fiscal_year=? AND f.report_type='SR' AND a.selected=1 AND a.status='done'
+                """, (issuer["ibm_code"], year)).fetchone()[0]
+
+                if ar_done and sr_done:
+                    status = "AR_AND_SR_DOWNLOADED"
+                elif ar_done:
+                    status = "AR_DOWNLOADED"
+                elif sr_done:
+                    status = "SR_DOWNLOADED"
+                elif ar_filing or sr_filing:
+                    status = "FOUND_NOT_DOWNLOADED"
+                else:
+                    status = "NO_FILING_FOUND"
+
+                w.writerow({
+                    **dict(issuer),
+                    "fiscal_year": year,
+                    "ar_filings": ar_filing,
+                    "ar_downloaded": ar_done,
+                    "sr_filings": sr_filing,
+                    "sr_downloaded": sr_done,
+                    "status": status,
+                })
     conn.close()

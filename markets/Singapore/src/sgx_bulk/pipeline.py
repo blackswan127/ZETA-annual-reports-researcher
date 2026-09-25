@@ -39,10 +39,11 @@ class Pipeline:
 
         print("[2/4] Scanning SGX financial-reports feed...")
         rows = await self.source.global_report_rows(workers=self.discovery_workers)
-        annual_rows = [r for r in rows if self.source.is_annual(r)]
+        qualifying_rows = [r for r in rows if self.source.is_annual(r) or self.source.is_sustainability(r)]
         alias_index = self.source.issuer_alias_index(issuers)
-        mapped = 0
-        for row in annual_rows:
+        mapped_ar = 0
+        mapped_sr = 0
+        for row in qualifying_rows:
             year = self.source.row_year(row)
             if year is None or not (self.start_year <= year <= self.end_year):
                 continue
@@ -53,8 +54,11 @@ class Pipeline:
             filing = self.source.filing_from_row(row, issuer)
             if filing:
                 self.db.upsert_filing(filing, "global", reason)
-                mapped += 1
-        print(f"      mapped annual filings in target years: {mapped}")
+                if filing.report_type == "AR":
+                    mapped_ar += 1
+                else:
+                    mapped_sr += 1
+        print(f"      mapped filings in target years: total={mapped_ar + mapped_sr} (AR={mapped_ar}, SR={mapped_sr})")
 
         if self.targeted_recovery:
             missing = self._issuers_with_missing_any_year(issuers)
@@ -93,13 +97,13 @@ class Pipeline:
     def _issuers_with_missing_any_year(self, issuers: list[Issuer]) -> list[Issuer]:
         out = []
         for issuer in issuers:
-            found = {r[0] for r in self.db.conn.execute("SELECT DISTINCT fiscal_year FROM filings WHERE ibm_code=?", (issuer.ibm_code,))}
+            found = {r[0] for r in self.db.conn.execute("SELECT DISTINCT fiscal_year FROM filings WHERE ibm_code=? AND report_type='AR'", (issuer.ibm_code,))}
             if any(y not in found for y in range(self.start_year, self.end_year + 1)):
                 out.append(issuer)
         return out
 
     async def resolve(self) -> tuple[int, int]:
-        print("[4/4] Resolving annual-report PDF attachments...")
+        print("[4/4] Resolving report PDF attachments (AR & SR)...")
         rows = self.db.filings_needing_resolution()
         sem = asyncio.Semaphore(max(1, self.detail_workers))
         ok = fail = 0
@@ -113,6 +117,7 @@ class Pipeline:
                     period_end=__import__("datetime").date.fromisoformat(row["period_end"]),
                     broadcast_at=__import__("datetime").datetime.fromisoformat(row["broadcast_at"]),
                     detail_url=row["detail_url"], title=row["title"],
+                    report_type=row["report_type"] if "report_type" in row.keys() else "AR",
                 )
                 attachments, selected = await self.source.resolve_attachments(filing)
                 if not attachments or not selected:
@@ -126,7 +131,7 @@ class Pipeline:
                 good, ann = await fut
                 if good: ok += 1
                 else:
-                    fail += 1; print("      no annual PDF candidate:", ann)
+                    fail += 1; print("      no qualifying PDF candidate:", ann)
             except Exception as exc:
                 fail += 1; print("      attachment resolution failed:", exc)
         return ok, fail

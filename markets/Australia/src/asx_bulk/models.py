@@ -25,3 +25,4 @@ class Filing:
     year_method: str = ""
     score: int = 0
     pdf_url: str = ""
+    report_type: str = "AR"

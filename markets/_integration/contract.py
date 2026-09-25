@@ -16,6 +16,17 @@ MARKET_DEFAULTS = {
     "India": {"iso3": "IND", "mic": "XNSE", "secondary_mics": ["XBOM"], "aliases": ["BSE", "NSE", "IND", "INDIA"]},
     "NewZealand": {"iso3": "NZL", "mic": "XNZE", "aliases": ["NZX", "NZL", "NEWZEALAND", "NEW ZEALAND"]},
     "Singapore": {"iso3": "SGP", "mic": "XSES", "aliases": ["SGX", "SGP", "SINGAPORE"]},
+    "SriLanka": {"iso3": "LKA", "mic": "XCOL", "aliases": ["CSE", "COLOMBO", "LKA", "SRILANKA", "SRI LANKA"]},
+    "Africa": {
+        "iso3": "ZAF",
+        "mic": "XJSE",
+        "aliases": [
+            "AFRICA", "PANAFRICA", "PAN-AFRICA", "AFRICAN", "SOUTHAFRICA", "SOUTH AFRICA",
+            "NIGERIA", "KENYA", "GHANA", "BOTSWANA", "ZAMBIA", "TANZANIA", "ZIMBABWE",
+            "MAURITIUS", "NAMIBIA", "UGANDA", "MALAWI", "RWANDA", "ESWATINI", "SEYCHELLES",
+            "SIERRALEONE", "SIERRA LEONE",
+        ],
+    },
 }
 
 

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS issuers (
   issuer_name TEXT NOT NULL,
   short_name TEXT NOT NULL,
   market TEXT NOT NULL,
+  isin TEXT DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS filings (
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS filings (
   broadcast_at TEXT NOT NULL,
   detail_url TEXT NOT NULL,
   title TEXT NOT NULL,
+  report_type TEXT NOT NULL DEFAULT 'AR',
   source_mode TEXT NOT NULL DEFAULT 'global',
   mapping_reason TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -67,6 +69,15 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        for col, table, dflt in [("isin", "issuers", "''"), ("report_type", "filings", "'AR'")]:
+            try:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT DEFAULT {dflt}")
+            except sqlite3.OperationalError:
+                pass
+        try:
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_filings_issuer_year_type ON filings(ibm_code, fiscal_year, report_type)")
+        except sqlite3.OperationalError:
+            pass
         self.conn.commit()
 
     def close(self) -> None:
@@ -74,32 +85,32 @@ class Database:
 
     def upsert_issuers(self, issuers: Iterable[Issuer]) -> None:
         self.conn.executemany(
-            """INSERT INTO issuers(ibm_code, stock_code, ticker, issuer_name, short_name, market)
-               VALUES(?,?,?,?,?,?)
+            """INSERT INTO issuers(ibm_code, stock_code, ticker, issuer_name, short_name, market, isin)
+               VALUES(?,?,?,?,?,?,?)
                ON CONFLICT(ibm_code) DO UPDATE SET
                  stock_code=excluded.stock_code, ticker=excluded.ticker,
                  issuer_name=excluded.issuer_name, short_name=excluded.short_name,
-                 market=excluded.market, updated_at=CURRENT_TIMESTAMP""",
-            [(i.ibm_code, i.stock_code, i.ticker, i.issuer_name, i.short_name, i.market) for i in issuers],
+                 market=excluded.market, isin=excluded.isin, updated_at=CURRENT_TIMESTAMP""",
+            [(i.ibm_code, i.stock_code, i.ticker, i.issuer_name, i.short_name, i.market, getattr(i, "isin", "")) for i in issuers],
         )
         self.conn.commit()
 
     def upsert_filing(self, filing: Filing, source_mode: str, mapping_reason: str) -> None:
         self.conn.execute(
             """INSERT INTO filings(announcement_id, ibm_code, stock_code, issuer_name, short_name,
-               fiscal_year, period_end, broadcast_at, detail_url, title, source_mode, mapping_reason)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+               fiscal_year, period_end, broadcast_at, detail_url, title, report_type, source_mode, mapping_reason)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(announcement_id) DO UPDATE SET
                  ibm_code=excluded.ibm_code, stock_code=excluded.stock_code,
                  issuer_name=excluded.issuer_name, short_name=excluded.short_name,
                  fiscal_year=excluded.fiscal_year, period_end=excluded.period_end,
                  broadcast_at=excluded.broadcast_at, detail_url=excluded.detail_url,
-                 title=excluded.title, source_mode=excluded.source_mode,
+                 title=excluded.title, report_type=excluded.report_type, source_mode=excluded.source_mode,
                  mapping_reason=excluded.mapping_reason, updated_at=CURRENT_TIMESTAMP""",
             (
                 filing.announcement_id, filing.ibm_code, filing.stock_code, filing.issuer_name,
                 filing.short_name, filing.fiscal_year, filing.period_end.isoformat(),
-                filing.broadcast_at.isoformat(), filing.detail_url, filing.title,
+                filing.broadcast_at.isoformat(), filing.detail_url, filing.title, filing.report_type,
                 source_mode, mapping_reason,
             ),
         )
@@ -141,7 +152,7 @@ class Database:
         statuses = ("discovered", "failed") if retry_failed else ("discovered",)
         qmarks = ",".join("?" for _ in statuses)
         return self.conn.execute(
-            f"""SELECT a.*, f.ibm_code, f.stock_code, f.issuer_name, f.fiscal_year
+            f"""SELECT a.*, f.ibm_code, f.stock_code, f.issuer_name, f.fiscal_year, f.report_type
                 FROM attachments a JOIN filings f USING(announcement_id)
                 WHERE a.selected=1 AND a.status IN ({qmarks})
                 ORDER BY f.fiscal_year, f.stock_code, a.filename""",

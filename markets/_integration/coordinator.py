@@ -77,6 +77,12 @@ def parse_plain_english_directive(prompt: str) -> Dict[str, Any]:
         "India": ["india", "bse", "nse", "indian"],
         "NewZealand": ["new zealand", "newzealand", "nzx", "kiwi"],
         "Singapore": ["singapore", "sgx"],
+        "SriLanka": ["sri lanka", "srilanka", "cse", "colombo"],
+        "Africa": [
+            "africa", "african", "jse", "south africa", "ngx", "nigeria", "kenya", "nse kenya",
+            "ghana", "gse", "botswana", "bse", "zambia", "luse", "tanzania", "dse tanzania",
+            "zimbabwe", "mauritius", "namibia", "uganda", "malawi", "rwanda", "eswatini", "seychelles", "sierra leone",
+        ],
     }
     for m, kw_list in market_keywords.items():
         if any(kw in p_lower for kw in kw_list):
@@ -85,16 +91,19 @@ def parse_plain_english_directive(prompt: str) -> Dict[str, Any]:
     if not market:
         raise ValueError(f"Could not identify target market from directive: '{prompt}'")
 
-    # 2. Count detection (e.g., "next 100", "50 companies", "10 issuers")
+    # 2. Count detection (e.g., "next 100", "50 companies", "10 issuers", "all currently listed companies")
     count = 100  # Default cohort size
-    m_count = re.search(r"\b(?:next\s+|first\s+|top\s+)?(\d+)\s*(?:companies|issuers|stocks|corporations|firms|entities)?\b", p_lower)
-    if m_count:
-        try:
-            val = int(m_count.group(1))
-            if 1 <= val <= 10000:
-                count = val
-        except Exception:
-            pass
+    if "all" in p_lower and ("company" in p_lower or "companies" in p_lower or "listed" in p_lower or "issuer" in p_lower):
+        count = 999999
+    else:
+        m_count = re.search(r"\b(?:next\s+|first\s+|top\s+)?(\d+)\s*(?:companies|issuers|stocks|corporations|firms|entities)?\b", p_lower)
+        if m_count:
+            try:
+                val = int(m_count.group(1))
+                if 1 <= val <= 10000:
+                    count = val
+            except Exception:
+                pass
 
     # 3. Fiscal Year detection
     # Examples: "FY2024", "2024", "2017-2025", "FY17-FY25"

@@ -1,4 +1,4 @@
-# Common Integration Contract: Seven Market Annual Reports
+# Common Integration Contract: Nine Market Annual Reports
 
 This document defines the architectural, data, and execution contract across all international market packages in `markets/`:
 - **Australia (ASX)**: `markets/Australia/` (Exchange MIC: `XASX`, ISO3: `AUS`)
@@ -8,6 +8,8 @@ This document defines the architectural, data, and execution contract across all
 - **India (BSE / NSE)**: `markets/India/` (Exchange MICs: `XNSE`, `XBOM`, ISO3: `IND`)
 - **New Zealand (NZX)**: `markets/NewZealand/` (Exchange MIC: `XNZE`, ISO3: `NZL`)
 - **Singapore (SGX)**: `markets/Singapore/` (Exchange MIC: `XSES`, ISO3: `SGP`)
+- **Sri Lanka (CSE)**: `markets/SriLanka/` (Exchange MIC: `XCOL`, ISO3: `LKA`)
+- **Pan-Africa (16 Markets)**: `markets/Africa/` (Covering South Africa [`XJSE`], Nigeria [`XNSA`], Kenya [`XNAI`], Ghana [`XGHA`], Botswana [`XBOT`], Zambia [`XLUS`], Tanzania [`XDAR`], Zimbabwe [`XZIM`], Mauritius [`XMAU`], Namibia [`XNAM`], Uganda [`XUGA`], Malawi [`XMSW`], Rwanda [`XRWA`], Eswatini [`XSWA`], Seychelles [`XMSX`], Sierra Leone [`XSLS`])
 
 ---
 

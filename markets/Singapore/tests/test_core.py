@@ -47,3 +47,17 @@ def test_report_mapping():
 def test_non_annual_rejected():
     reports = json.loads((FIX / "reports.json").read_text())["data"]
     assert not SGXSource.is_annual(reports[1])
+    assert SGXSource.is_sustainability(reports[1])
+
+
+def test_sustainability_filing_and_scoring():
+    reports = json.loads((FIX / "reports.json").read_text())["data"]
+    issuer = Issuer("1J26", "S68", "SINGAPORE EXCHANGE LIMITED", "SGX", "MAINBOARD", isin="SG1S04926220")
+    filing = SGXSource.filing_from_row(reports[1], issuer)
+    assert filing is not None
+    assert filing.report_type == "SR"
+    assert filing.announcement_id == "AAAAAAAAAAAAAAAA"
+
+    sr_score = attachment_score("859055_2025_SGX_Sustainability_Report.pdf", 2025, report_type="SR")
+    ar_score = attachment_score("859054_2025_SGX_Annual_Report.pdf", 2025, report_type="SR")
+    assert sr_score > ar_score

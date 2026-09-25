@@ -58,6 +58,68 @@ def annual_score(title: str, pages: int | None = None) -> int:
     return score
 
 
+SUSTAINABILITY_EXCLUDE = (
+    "half year", "half-year", "interim", "quarterly", "appendix 4d",
+    "notice of annual general meeting", "notice of agm", "agm",
+    "release and dispatch", "dispatch of", "supplementary information",
+    "presentation", "investor presentation", "results release", "results announcement",
+    "proxy form", "dividend", "distribution", "briefing",
+)
+
+
+def sustainability_score(title: str, pages: int | None = None) -> tuple[str | None, int]:
+    t = normalize_title(title).lower()
+    if any(x in t for x in SUSTAINABILITY_EXCLUDE):
+        return None, -100
+    if "annual general meeting" in t:
+        return None, -100
+
+    rep_type = None
+    score = 0
+
+    if "sustainability report" in t or "sustainability review" in t:
+        rep_type = "SR"
+        score = 90
+    elif "sustainability and social impact" in t or "corporate sustainability" in t:
+        rep_type = "SR"
+        score = 90
+    elif "esg report" in t or "environment, social and governance" in t or "environmental, social and governance" in t:
+        rep_type = "ESG"
+        score = 90
+    elif "climate transition action plan" in t or "climate report" in t or "climate change report" in t:
+        rep_type = "CLIMATE"
+        score = 85
+    elif "modern slavery statement" in t or "modern slavery report" in t:
+        rep_type = "SR"
+        score = 85
+    elif "corporate responsibility report" in t:
+        rep_type = "SR"
+        score = 80
+    elif "sustainability" in t and "report" in t:
+        rep_type = "SR"
+        score = 75
+    else:
+        return None, -100
+
+    if pages is not None:
+        if pages >= 20:
+            score += 10
+        elif pages <= 3:
+            score -= 30
+
+    return rep_type, score
+
+
+def classify_filing(title: str, pages: int | None = None) -> tuple[str | None, int]:
+    ar_sc = annual_score(title, pages)
+    if ar_sc > 0:
+        return "AR", ar_sc
+    sr_type, sr_sc = sustainability_score(title, pages)
+    if sr_sc > 0 and sr_type:
+        return sr_type, sr_sc
+    return None, -100
+
+
 def infer_fiscal_year(title: str, published: date) -> tuple[int, str]:
     t = normalize_title(title)
     # Explicit FY2025 / FY25.

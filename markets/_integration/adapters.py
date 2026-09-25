@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
+import json
 import os
+import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -34,6 +37,8 @@ def ensure_sys_paths():
         str(ROOT_DIR / "markets" / "India" / "src"),
         str(ROOT_DIR / "markets" / "NewZealand" / "src"),
         str(ROOT_DIR / "markets" / "Singapore" / "src"),
+        str(ROOT_DIR / "markets" / "SriLanka" / "src"),
+        str(ROOT_DIR / "markets" / "Africa" / "src"),
     ]
     for p in paths:
         if p not in sys.path:
@@ -71,6 +76,38 @@ class BaseMarketAdapter(ABC):
 class AustraliaAdapter(BaseMarketAdapter):
     def __init__(self):
         super().__init__("Australia")
+        self._lei_cache = None
+        self._isin_cache = None
+
+    def _load_mappings(self) -> tuple[dict[str, str], dict[str, str]]:
+        if self._lei_cache is not None and self._isin_cache is not None:
+            return self._lei_cache, self._isin_cache
+        ticker_to_lei: dict[str, str] = {}
+        ticker_to_isin: dict[str, str] = {}
+        for p in (ROOT_DIR / "local").glob("wikidata*.json"):
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    if isinstance(data, list):
+                        for item in data:
+                            t = item.get("ticker", "")
+                            isin = item.get("isin", "")
+                            lei = item.get("lei", "")
+                            if isinstance(t, dict): t = t.get("value", "")
+                            if isinstance(isin, dict): isin = isin.get("value", "")
+                            if isinstance(lei, dict): lei = lei.get("value", "")
+                            t = str(t).strip().upper()
+                            isin = str(isin).strip().upper()
+                            lei = str(lei).strip().upper()
+                            if t and lei and len(lei) == 20:
+                                ticker_to_lei[t] = lei
+                            if t and isin and len(isin) == 12:
+                                ticker_to_isin[t] = isin
+            except Exception:
+                pass
+        self._lei_cache = ticker_to_lei
+        self._isin_cache = ticker_to_isin
+        return ticker_to_lei, ticker_to_isin
 
     async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
         ensure_sys_paths()
@@ -81,16 +118,21 @@ class AustraliaAdapter(BaseMarketAdapter):
         finally:
             await source.close()
 
+        ticker_to_lei, ticker_to_isin = self._load_mappings()
         as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         roster = []
         for r in records:
             ticker = r.ticker.strip().upper()
+            lei = ticker_to_lei.get(ticker, "")
+            isin = ticker_to_isin.get(ticker, "")
             roster.append(CurrentIssuerRecord(
                 issuer_id=ticker,
                 legal_name=r.name,
                 country_iso3="AUS",
                 mic="XASX",
                 ticker=ticker,
+                isin=isin,
+                lei=lei,
                 instrument_type="Equity",
                 active_status="ACTIVE",
                 as_of_date=as_of,
@@ -134,48 +176,60 @@ class AustraliaAdapter(BaseMarketAdapter):
         results: List[SlotResult] = []
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                # Search downloaded PDF in work_dir
-                matched_pdf = None
                 company_pattern = f"{issuer.ticker}_*"
                 fy_dir = work_dir / "pdfs"
+                matched_pdfs = []
                 if fy_dir.exists():
                     for f in fy_dir.glob(f"{company_pattern}/{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
-                    if not matched_pdf:
+                        matched_pdfs.append(f)
+                    if not matched_pdfs:
                         for f in fy_dir.glob(f"{issuer.ticker}*/**/{fy}/*.pdf"):
-                            matched_pdf = f
-                            break
+                            matched_pdfs.append(f)
 
-                if matched_pdf and matched_pdf.exists():
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=matched_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3=issuer.country_iso3,
-                        mic=issuer.mic,
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                    )
-                    h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                if matched_pdfs:
+                    for matched_pdf in matched_pdfs:
+                        fname_lower = matched_pdf.name.lower()
+                        if "annual" in fname_lower:
+                            rep_type = "AR"
+                        elif "sustain" in fname_lower or "sr" in fname_lower:
+                            rep_type = "SR"
+                        elif "esg" in fname_lower:
+                            rep_type = "ESG"
+                        elif "climate" in fname_lower:
+                            rep_type = "CLIMATE"
+                        else:
+                            rep_type = "AR"
+
+                        slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rep_type}"
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=matched_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            report_type=rep_type,
+                        )
+                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
                 else:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:AR"
                     results.append(SlotResult(
                         slot_id=slot_id,
                         run_id=cohort.run_id,
@@ -462,6 +516,7 @@ class SingaporeAdapter(BaseMarketAdapter):
                 country_iso3="SGP",
                 mic="XSES",
                 ticker=i.stock_code or i.ibm_code,
+                isin=getattr(i, "isin", ""),
                 instrument_type=getattr(i, "market", "Mainboard") or "Equity",
                 active_status="ACTIVE",
                 as_of_date=as_of,
@@ -497,48 +552,51 @@ class SingaporeAdapter(BaseMarketAdapter):
             await pipe.close()
 
         results: List[SlotResult] = []
+        conn = pipe.db.conn
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
-                fy_dir = work_dir / "pdfs"
-                if fy_dir.exists():
-                    for f in fy_dir.glob(f"*{issuer.ticker}*/**/{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
-                    if not matched_pdf:
-                        for f in fy_dir.glob(f"*{issuer.issuer_id}*/**/{fy}/*.pdf"):
-                            matched_pdf = f
-                            break
+                downloaded_rows = conn.execute(
+                    """SELECT a.local_path, f.report_type, f.title
+                       FROM attachments a JOIN filings f USING(announcement_id)
+                       WHERE f.ibm_code=? AND f.fiscal_year=? AND a.selected=1 AND a.status='done'""",
+                    (issuer.issuer_id, fy),
+                ).fetchall()
 
-                if matched_pdf and matched_pdf.exists():
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=matched_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3=issuer.country_iso3,
-                        mic=issuer.mic,
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                    )
-                    h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                if downloaded_rows:
+                    for row in downloaded_rows:
+                        local_p = Path(row[0]) if row[0] else None
+                        rtype = row[1] if row[1] else "AR"
+                        slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                        if local_p and local_p.exists():
+                            status, reason, final_path = promote_pdf_to_corpus(
+                                source_pdf=local_p,
+                                output_root=output_corpus,
+                                staging_root=self.staging_dir,
+                                iso3=issuer.country_iso3,
+                                mic=issuer.mic,
+                                ticker=issuer.ticker,
+                                fiscal_year=fy,
+                                lei=issuer.lei,
+                                isin=issuer.isin,
+                                report_type=rtype,
+                            )
+                            h, sz = compute_sha256_and_size(final_path if final_path.exists() else local_p)
+                            _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else local_p)
+                            results.append(SlotResult(
+                                slot_id=slot_id,
+                                run_id=cohort.run_id,
+                                issuer_id=issuer.issuer_id,
+                                fiscal_year=fy,
+                                status=status,
+                                reason=reason,
+                                sha256=h,
+                                page_count=pages,
+                                file_size_bytes=sz,
+                                destination_path=str(final_path),
+                                elapsed_seconds=round(time.time() - t0, 2),
+                            ))
                 else:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:AR"
                     results.append(SlotResult(
                         slot_id=slot_id,
                         run_id=cohort.run_id,
@@ -883,6 +941,386 @@ class NewZealandAdapter(BaseMarketAdapter):
         return results
 
 
+class SriLankaAdapter(BaseMarketAdapter):
+    def __init__(self):
+        super().__init__("SriLanka")
+        self._lei_cache = None
+        self._isin_cache = None
+
+    def _load_mappings(self) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        if self._lei_cache is not None and self._isin_cache is not None and hasattr(self, "_name_to_lei"):
+            return self._lei_cache, self._isin_cache, self._name_to_lei
+        ticker_to_lei: dict[str, str] = {}
+        ticker_to_isin: dict[str, str] = {}
+        name_to_lei: dict[str, str] = {}
+
+        gleif_file = ROOT_DIR / "markets" / "SriLanka" / "local" / "gleif_lk.json"
+        if gleif_file.exists():
+            try:
+                with open(gleif_file, encoding="utf-8") as fh:
+                    gdata = json.load(fh)
+                    for item in gdata:
+                        lei = item.get("attributes", {}).get("lei", "")
+                        name = item.get("attributes", {}).get("entity", {}).get("legalName", {}).get("name", "")
+                        clean = re.sub(r"[^A-Z0-9]", "", name.upper()).replace("PLC", "").replace("LIMITED", "").replace("LTD", "").replace("PUBLIC", "")
+                        if clean and lei and len(lei) == 20:
+                            name_to_lei[clean] = lei
+            except Exception:
+                pass
+
+        for p in (ROOT_DIR / "local").glob("wikidata*.json"):
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    if isinstance(data, list):
+                        for item in data:
+                            t = item.get("ticker", "")
+                            isin = item.get("isin", "")
+                            lei = item.get("lei", "")
+                            if isinstance(t, dict): t = t.get("value", "")
+                            if isinstance(isin, dict): isin = isin.get("value", "")
+                            if isinstance(lei, dict): lei = lei.get("value", "")
+                            t = str(t).strip().upper()
+                            isin = str(isin).strip().upper()
+                            lei = str(lei).strip().upper()
+                            if t and lei and len(lei) == 20:
+                                ticker_to_lei[t] = lei
+                            if t and isin and len(isin) == 12:
+                                ticker_to_isin[t] = isin
+            except Exception:
+                pass
+
+        self._lei_cache = ticker_to_lei
+        self._isin_cache = ticker_to_isin
+        self._name_to_lei = name_to_lei
+        return self._lei_cache, self._isin_cache, self._name_to_lei
+
+    async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
+        ensure_sys_paths()
+        from lka_cse_bulk.cse import CSEClient
+
+        roster_cache = self.local_dir / "roster.json"
+        if not refresh and roster_cache.exists():
+            try:
+                with open(roster_cache, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return [CurrentIssuerRecord.from_dict(d) for d in data]
+            except Exception:
+                pass
+
+        lei_map, isin_map, name_to_lei = self._load_mappings()
+        client = CSEClient()
+        try:
+            raw_issuers = await client.universe()
+        finally:
+            await client.close()
+
+        # Enrich missing ISINs via companyInfoSummery concurrently
+        missing_isin = [i for i in raw_issuers if not (i.isin or isin_map.get(i.ticker.upper()))]
+        if missing_isin:
+            sem = asyncio.Semaphore(16)
+            async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as http_client:
+                async def fetch_isin(iss):
+                    async with sem:
+                        try:
+                            r = await http_client.post("https://www.cse.lk/api/companyInfoSummery", data={"symbol": iss.symbol}, timeout=10)
+                            if r.status_code == 200:
+                                val = r.json().get("reqSymbolInfo", {}).get("isin")
+                                if val:
+                                    isin_map[iss.ticker.upper()] = val
+                        except Exception:
+                            pass
+                await asyncio.gather(*(fetch_isin(i) for i in missing_isin))
+
+        roster: List[CurrentIssuerRecord] = []
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for i in raw_issuers:
+            tick = i.ticker.upper()
+            clean_name = re.sub(r"[^A-Z0-9]", "", i.name.upper()).replace("PLC", "").replace("LIMITED", "").replace("LTD", "").replace("PUBLIC", "")
+            lei = i.lei or lei_map.get(tick, "") or name_to_lei.get(clean_name, "")
+            isin = i.isin or isin_map.get(tick, "")
+            roster.append(CurrentIssuerRecord(
+                issuer_id=i.symbol,
+                legal_name=i.name,
+                country_iso3="LKA",
+                mic="XCOL",
+                ticker=i.ticker,
+                isin=isin,
+                lei=lei,
+                instrument_type="Equity",
+                active_status="ACTIVE",
+                as_of_date=today,
+                source_url="https://www.cse.lk/api/alphabetical",
+                extra={"symbol": i.symbol, "stable_id": i.issuer_id},
+            ))
+
+        with open(roster_cache, "w", encoding="utf-8") as f:
+            json.dump([r.to_dict() for r in roster], f, indent=2)
+        return roster
+
+    async def harvest_cohort(
+        self,
+        cohort: CohortManifest,
+        output_corpus: Path,
+    ) -> List[SlotResult]:
+        ensure_sys_paths()
+        from lka_cse_bulk.cse import CSEClient, Issuer as CSEIssuer
+        from lka_cse_bulk.downloader import Downloader
+
+        work_dir = self.local_dir / "work"
+        staging_dir = self.staging_dir
+        work_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        t0 = time.time()
+        start_yr = min(cohort.fiscal_years) if cohort.fiscal_years else 2017
+        end_yr = max(cohort.fiscal_years) if cohort.fiscal_years else 2025
+
+        cse_client = CSEClient(rps=2.0)
+        downloader = Downloader(workers=16, rps=8.0)
+
+        results: List[SlotResult] = []
+        sem = asyncio.Semaphore(8)
+
+        async def process_issuer(issuer):
+            symbol = issuer.extra.get("symbol") if hasattr(issuer, "extra") and isinstance(issuer.extra, dict) else ""
+            if not symbol:
+                symbol = f"{issuer.ticker}.N0000"
+            cse_iss = CSEIssuer(
+                issuer_id=f"LKA:XCOL:{issuer.ticker}",
+                symbol=symbol,
+                ticker=issuer.ticker,
+                name=issuer.legal_name,
+                isin=issuer.isin or None,
+                lei=issuer.lei or None,
+            )
+            async with sem:
+                try:
+                    candidates = await cse_client.annual_reports(cse_iss, start_yr, end_yr)
+                except Exception:
+                    candidates = []
+
+            # Group candidates by (fy, report_type)
+            by_fy: dict[int, Any] = {}
+            for cand in candidates:
+                rtype = getattr(cand, "report_type", "AR")
+                key = cand.fy
+                if key and (key not in by_fy or cand.fy_confidence > by_fy[key].fy_confidence):
+                    by_fy[key] = cand
+
+            issuer_results = []
+            for fy in cohort.fiscal_years:
+                cand = by_fy.get(fy)
+                rtype = getattr(cand, "report_type", "AR") if cand else "AR"
+                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                if not cand:
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status="UNRESOLVED",
+                        reason="No candidate filing found in CSE infoAnnualData",
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+                    continue
+
+                temp_pdf = staging_dir / f"{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
+                try:
+                    download_meta = await downloader.get(cand.source_url, temp_pdf)
+                    status, reason, final_path = promote_pdf_to_corpus(
+                        source_pdf=temp_pdf,
+                        output_root=output_corpus,
+                        staging_root=self.staging_dir,
+                        iso3="LKA",
+                        mic="XCOL",
+                        ticker=issuer.ticker,
+                        fiscal_year=fy,
+                        lei=issuer.lei,
+                        isin=issuer.isin,
+                        lang="EN",
+                        report_type=rtype,
+                    )
+                    temp_pdf.unlink(missing_ok=True)
+                    h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
+                    _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status=status,
+                        reason=reason,
+                        sha256=h,
+                        page_count=pages,
+                        file_size_bytes=sz,
+                        destination_path=str(final_path),
+                        source_url=cand.source_url,
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+                except Exception as e:
+                    temp_pdf.unlink(missing_ok=True)
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status="FAILED",
+                        reason=f"Download/validation error: {str(e)}",
+                        source_url=cand.source_url,
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+            return issuer_results
+
+        try:
+            batch_results = await asyncio.gather(*(process_issuer(iss) for iss in cohort.issuers))
+            for res_list in batch_results:
+                results.extend(res_list)
+        finally:
+            await cse_client.close()
+            await downloader.close()
+
+        return results
+
+
+class AfricaAdapter(BaseMarketAdapter):
+    def __init__(self):
+        super().__init__("Africa")
+
+    async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
+        from africa_ar_bulk.sources.universe import load_universe
+        issuers = load_universe(local_dir=ROOT_DIR / "local")
+        roster: List[CurrentIssuerRecord] = []
+        now_str = datetime.now(timezone.utc).isoformat()
+        for iss in issuers:
+            roster.append(CurrentIssuerRecord(
+                issuer_id=iss.issuer_id,
+                legal_name=iss.company_name,
+                country_iso3=iss.country_iso3,
+                mic=iss.exchange_mic,
+                ticker=iss.ticker,
+                isin=iss.isin or "",
+                lei=iss.lei or "",
+                instrument_type="Equity",
+                active_status="ACTIVE" if iss.active else "SUSPENDED",
+                as_of_date=now_str,
+                source_url=iss.source_url or "",
+            ))
+        return roster
+
+    async def harvest_cohort(
+        self,
+        cohort: CohortManifest,
+        output_corpus: Path,
+    ) -> List[SlotResult]:
+        from africa_ar_bulk.downloader import Downloader
+        from africa_ar_bulk.models import Issuer as AfricaIssuer
+        from africa_ar_bulk.sources.exchange_direct import DirectExchangeAdapter
+
+        results: List[SlotResult] = []
+        direct_adapter = DirectExchangeAdapter()
+        downloader = Downloader(workers=8, rps=4.0)
+        staging_dir = self.staging_dir
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        async def process_issuer(issuer: CurrentIssuerRecord) -> List[SlotResult]:
+            t0 = time.time()
+            aff_iss = AfricaIssuer(
+                issuer_id=issuer.issuer_id,
+                country_iso3=issuer.country_iso3,
+                exchange_mic=issuer.mic,
+                ticker=issuer.ticker,
+                company_name=issuer.legal_name,
+                isin=issuer.isin,
+                lei=issuer.lei,
+            )
+            min_fy = min(cohort.fiscal_years)
+            max_fy = max(cohort.fiscal_years)
+            try:
+                candidates = await direct_adapter.discover_candidates(aff_iss, min_fy, max_fy)
+            except Exception:
+                candidates = []
+
+            by_fy: dict[int, Any] = {}
+            for cand in candidates:
+                if cand.resolved_fy and (cand.resolved_fy not in by_fy or cand.fy_confidence > by_fy[cand.resolved_fy].fy_confidence):
+                    by_fy[cand.resolved_fy] = cand
+
+            issuer_results = []
+            for fy in cohort.fiscal_years:
+                cand = by_fy.get(fy)
+                rtype = "AR"
+                slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
+                if not cand or not cand.direct_pdf_url:
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status="UNRESOLVED",
+                        reason=f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy}",
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+                    continue
+
+                temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
+                try:
+                    _ = await downloader.get(cand.direct_pdf_url, temp_pdf)
+                    status, reason, final_path = promote_pdf_to_corpus(
+                        source_pdf=temp_pdf,
+                        output_root=output_corpus,
+                        staging_root=self.staging_dir,
+                        iso3=issuer.country_iso3,
+                        mic=issuer.mic,
+                        ticker=issuer.ticker,
+                        fiscal_year=fy,
+                        lei=issuer.lei,
+                        isin=issuer.isin,
+                        lang="EN",
+                        report_type=rtype,
+                    )
+                    temp_pdf.unlink(missing_ok=True)
+                    h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
+                    _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status=status,
+                        reason=reason,
+                        sha256=h,
+                        page_count=pages,
+                        file_size_bytes=sz,
+                        destination_path=str(final_path),
+                        source_url=cand.direct_pdf_url,
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+                except Exception as e:
+                    temp_pdf.unlink(missing_ok=True)
+                    issuer_results.append(SlotResult(
+                        slot_id=slot_id,
+                        run_id=cohort.run_id,
+                        issuer_id=issuer.issuer_id,
+                        fiscal_year=fy,
+                        status="FAILED",
+                        reason=f"Download/validation error: {str(e)}",
+                        source_url=cand.direct_pdf_url,
+                        elapsed_seconds=round(time.time() - t0, 2),
+                    ))
+            return issuer_results
+
+        try:
+            batch_results = await asyncio.gather(*(process_issuer(iss) for iss in cohort.issuers))
+            for res_list in batch_results:
+                results.extend(res_list)
+        finally:
+            await direct_adapter.close()
+            await downloader.close()
+
+        return results
+
+
 def get_market_adapter(market_name: str) -> BaseMarketAdapter:
     norm = resolve_market_info(market_name)["name"]
     adapters = {
@@ -893,6 +1331,8 @@ def get_market_adapter(market_name: str) -> BaseMarketAdapter:
         "Canada": CanadaAdapter,
         "Bangladesh": BangladeshAdapter,
         "NewZealand": NewZealandAdapter,
+        "SriLanka": SriLankaAdapter,
+        "Africa": AfricaAdapter,
     }
     if norm not in adapters:
         raise ValueError(f"No adapter available for market '{market_name}'")
