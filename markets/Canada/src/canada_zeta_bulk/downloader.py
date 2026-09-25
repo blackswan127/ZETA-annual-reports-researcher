@@ -41,6 +41,8 @@ class Downloader:
                 try:
                     offset=part.stat().st_size if part.exists() else 0
                     headers={"Range":f"bytes={offset}-"} if offset else {}
+                    if "sec.gov" in parsed.netloc:
+                        headers["User-Agent"] = os.environ.get("SEC_USER_AGENT", "blackswan capital khanholdings127@gmail.com")
                     await self.rate.acquire()
                     async with self.client.stream("GET",url,headers=headers) as r:
                         if r.status_code==416 and offset:
@@ -60,5 +62,8 @@ class Downloader:
                     os.replace(part,dest); return
                 except Exception as exc:
                     last=exc
+                    if "received_html_instead_of_pdf" in str(exc) or "invalid_pdf_signature" in str(exc):
+                        break
                     if attempt+1<self.retries: await asyncio.sleep(min(30,1.7**attempt)+random.random()*.25)
+            part.unlink(missing_ok=True)
             raise RuntimeError(f"download_failed:{last}")

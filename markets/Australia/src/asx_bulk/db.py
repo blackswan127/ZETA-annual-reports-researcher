@@ -9,6 +9,7 @@ from .models import Filing, Issuer
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=60000;
 CREATE TABLE IF NOT EXISTS issuers (
   ticker TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -70,7 +71,7 @@ class Database:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=60.0)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         try:

@@ -14,8 +14,9 @@ class AsyncRateLimiter:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
-        async with self._lock:
-            while True:
+        while True:
+            delay = 0.0
+            async with self._lock:
                 now = time.monotonic()
                 while self._events and now - self._events[0] >= 1.0:
                     self._events.popleft()
@@ -23,8 +24,9 @@ class AsyncRateLimiter:
                     self._events.append(now)
                     return
                 delay = 1.0 - (now - self._events[0])
-                if delay > 0:
-                    await asyncio.sleep(delay)
+            if delay > 0:
+                await asyncio.sleep(delay)
+
 
 
 def safe_name(value: str, max_len: int = 100) -> str:

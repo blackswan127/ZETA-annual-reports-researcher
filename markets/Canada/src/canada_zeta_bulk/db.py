@@ -251,7 +251,7 @@ class Database:
 
     def pending_downloads(self):
         return self.conn.execute(
-            """SELECT c.*, i.name,i.ticker,i.exchange_mic,i.isin,i.lei,i.website,
+            """SELECT c.*, i.*,
                       d.status AS download_status,d.staging_path,d.final_path
                FROM candidates c JOIN issuers i USING(issuer_key)
                JOIN downloads d ON d.candidate_id=c.id

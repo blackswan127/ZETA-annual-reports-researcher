@@ -83,7 +83,16 @@ def parse_plain_english_directive(prompt: str) -> Dict[str, Any]:
             "ghana", "gse", "botswana", "bse", "zambia", "luse", "tanzania", "dse tanzania",
             "zimbabwe", "mauritius", "namibia", "uganda", "malawi", "rwanda", "eswatini", "seychelles", "sierra leone",
         ],
+        "MiddleEast": [
+            "middle east", "middleeast", "oman", "msx", "jordan", "ase", "uae", "dubai", "dfm",
+            "abu dhabi", "abudhabi", "adx", "saudi", "tadawul", "qatar", "qse", "bahrain", "kuwait", "boursa kuwait",
+        ],
     }
+
+    # Explicit directive exclusion check
+    if any(ex in p_lower for ex in ["palestine", "israel", "pse", "pex", "tase"]):
+        raise ValueError(f"Directives targeting Palestine or Israel are explicitly excluded: '{prompt}'")
+
     for m, kw_list in market_keywords.items():
         if any(kw in p_lower for kw in kw_list):
             market = m

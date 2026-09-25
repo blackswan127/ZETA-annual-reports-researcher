@@ -29,11 +29,12 @@ class Pipeline:
     def close(self): self.db.close()
 
     def _issuer_from_row(self,r) -> Issuer:
+        d = dict(r)
         return Issuer(
-            issuer_key=r["issuer_key"],name=r["name"],ticker=r["ticker"],exchange_mic=r["exchange_mic"],
-            security_type=r["security_type"] or "",industry=r["industry"] or "",listing_date=r["listing_date"] or "",
-            website=r["website"] or "",isin=r["isin"] or "",lei=r["lei"] or "",sedar_profile=r["sedar_profile"] or "",
-            active=bool(r["active"]),eligible=bool(r["eligible"]),source=r["source"] or "",
+            issuer_key=d.get("issuer_key",""),name=d.get("name",""),ticker=d.get("ticker",""),exchange_mic=d.get("exchange_mic",""),
+            security_type=d.get("security_type") or "",industry=d.get("industry") or "",listing_date=d.get("listing_date") or "",
+            website=d.get("website") or "",isin=d.get("isin") or "",lei=d.get("lei") or "",sedar_profile=d.get("sedar_profile") or "",
+            active=bool(d.get("active",1)),eligible=bool(d.get("eligible",1)),source=d.get("source") or "",
         )
 
     async def universe(self, universe_file: Path | None=None, include_nex: bool=False, fetch_tmx: bool=False) -> int:
@@ -134,10 +135,10 @@ class Pipeline:
         rows=[r for r in self.db.pending_downloads() if in_shard(r["issuer_key"],self.s.shard_count,self.s.shard_index)]
         if keys:
             allowed_keys = {k.strip().upper() for k in keys if k}
-            rows = [r for r in rows if r["issuer_key"].strip().upper() in allowed_keys or (r.get("ticker") or "").strip().upper() in allowed_keys]
+            rows = [r for r in rows if r["issuer_key"].strip().upper() in allowed_keys or (dict(r).get("ticker") or "").strip().upper() in allowed_keys]
         if tickers:
             allowed_tickers = {t.strip().upper() for t in tickers if t}
-            rows = [r for r in rows if (r.get("ticker") or "").strip().upper() in allowed_tickers]
+            rows = [r for r in rows if (dict(r).get("ticker") or "").strip().upper() in allowed_tickers]
         if limit: rows=rows[:limit]
         dl=Downloader(self.s.download_workers,self.s.download_rps,self.s.timeout,self.s.retries,self.s.chunk_size)
         done=0; lock=asyncio.Lock()

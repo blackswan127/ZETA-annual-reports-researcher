@@ -147,8 +147,13 @@ class Downloader:
 
                         mode = "ab" if start and r.status_code == 206 else "wb"
                         with open(part, mode) as f:
-                            async for chunk in r.aiter_bytes(65536):
-                                f.write(chunk)
+                            aiter = r.aiter_bytes(65536).__aiter__()
+                            while True:
+                                try:
+                                    chunk = await asyncio.wait_for(aiter.__anext__(), timeout=15.0)
+                                    f.write(chunk)
+                                except StopAsyncIteration:
+                                    break
 
                     valid, pages, reason = self.validate_pdf(part, min_bytes=min_bytes)
                     if not valid:

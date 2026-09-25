@@ -152,8 +152,19 @@ def load_universe(
     issuers: List[Issuer] = []
 
     raw_rows = []
+    target_csv = None
     if universe_csv and Path(universe_csv).exists():
-        with open(universe_csv, "r", encoding="utf-8-sig") as f:
+        target_csv = Path(universe_csv)
+    else:
+        candidates = [
+            Path("markets/Africa/local/african_equity_universe.csv"),
+            Path("local/african_equity_universe.csv"),
+            Path("../local/african_equity_universe.csv"),
+        ]
+        target_csv = next((p for p in candidates if p.exists()), None)
+
+    if target_csv:
+        with open(target_csv, "r", encoding="utf-8-sig") as f:
             rdr = csv.DictReader(f)
             for r in rdr:
                 raw_rows.append({
@@ -164,6 +175,7 @@ def load_universe(
                     "isin": r.get("isin", ""),
                     "lei": r.get("lei", ""),
                     "fiscal_year_end": r.get("fiscal_year_end", ""),
+                    "source_url": r.get("source_url", ""),
                 })
     else:
         raw_rows = DEFAULT_AFRICAN_UNIVERSE
@@ -178,6 +190,7 @@ def load_universe(
         isin = row.get("isin", "").strip().upper() or isin_map.get(ticker, "")
         lei = row.get("lei", "").strip().upper() or lei_map.get(ticker, "")
         fye = row.get("fiscal_year_end", "").strip()
+        source_url = row.get("source_url", "").strip()
 
         if not ticker or not name:
             continue
@@ -193,7 +206,7 @@ def load_universe(
             lei=lei,
             fiscal_year_end=fye,
             active=1,
-            source_url="",
+            source_url=source_url,
         ))
 
     return sorted(issuers, key=lambda x: (x.country_iso3, x.ticker))

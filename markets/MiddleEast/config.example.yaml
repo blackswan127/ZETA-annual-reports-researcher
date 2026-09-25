@@ -1,0 +1,25 @@
+project:
+  name: Middle East AR v2
+  start_fy: 2017
+  end_fy: 2025
+  language: EN
+  required_document_class: AR_FULL
+
+runtime:
+  discovery_global_workers: 12
+  discovery_default_per_host: 2
+  discovery_default_rps_per_host: 2.0
+  pdf_global_workers: 16
+  pdf_default_per_host: 4
+  retry_attempts: 5
+  minimum_pdf_bytes: 50000
+
+policies:
+  publication_year_equals_fy: false
+  annual_financial_statements_equal_ar: false
+  invent_identifiers: false
+  require_pdf_validation: true
+  require_sha256: true
+  repeated_403_state: SOURCE_BLOCKED
+  respect_retry_after: true
+  issuer_ir_missing_only: true

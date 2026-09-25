@@ -26,6 +26,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=float, default=45.0)
     p.add_argument("--retries", type=int, default=5)
     p.add_argument("--min-pdf-bytes", type=int, default=25000)
+    p.add_argument("--report-types", type=str, default="AR,SR", help="Comma-separated report types (e.g. AR,SR)")
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -105,25 +106,28 @@ async def async_main(args: argparse.Namespace) -> int:
         res = resolve_african_market(args.country)
         iso3 = res["iso3"] if res else args.country.upper()
 
+    rtypes = [rt.strip().upper() for rt in getattr(args, "report_types", "AR,SR").split(",") if rt.strip()]
+
     try:
         if args.cmd == "universe":
             u_file = getattr(args, "universe_file", None)
             lim = getattr(args, "limit", None)
-            issuers = pipe.stage_universe(country_iso3=iso3, universe_csv=u_file, limit=lim)
+            issuers = pipe.stage_universe(country_iso3=iso3, universe_csv=u_file, limit=lim, report_types=rtypes)
             print(f"Staged {len(issuers)} issuers in {cfg.work_dir / 'harvest.sqlite3'}")
 
         elif args.cmd == "discover":
             lim = getattr(args, "limit", None)
-            count = await pipe.discover(limit=lim)
-            print(f"Discovered {count} annual report candidates")
+            target_issuers = pipe.db.get_issuers(iso3) if iso3 else None
+            count = await pipe.discover(issuers=target_issuers, limit=lim)
+            print(f"Discovered {count} annual/sustainability report candidates")
 
         elif args.cmd == "download":
             lim = getattr(args, "limit", None)
-            count = await pipe.download(limit=lim)
+            count = await pipe.download(country_iso3=iso3, limit=lim)
             print(f"Downloaded and validated {count} reports")
 
         elif args.cmd == "repair-missing":
-            count = await pipe.download(repair=True)
+            count = await pipe.download(country_iso3=iso3, repair=True)
             print(f"Repaired {count} missing/failed reports")
 
         elif args.cmd == "audit":
@@ -135,7 +139,7 @@ async def async_main(args: argparse.Namespace) -> int:
         elif args.cmd == "run":
             u_file = getattr(args, "universe_file", None)
             lim = getattr(args, "limit", None)
-            stats = await pipe.run(country_iso3=iso3, universe_csv=u_file, limit=lim)
+            stats = await pipe.run(country_iso3=iso3, universe_csv=u_file, limit=lim, report_types=rtypes)
             print("=== Africa AR Run Completed ===")
             for k, v in stats.items():
                 print(f"  {k}: {v}")

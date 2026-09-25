@@ -27,8 +27,8 @@ IR_SUBPATHS = [
 ]
 
 
-def stable_candidate_id(issuer_id: str, fy: Optional[int], url: str) -> str:
-    seed = f"{issuer_id}:{fy or ''}:{url}".encode("utf-8")
+def stable_candidate_id(issuer_id: str, fy: Optional[int], report_type: str, url: str) -> str:
+    seed = f"{issuer_id}:{fy or ''}:{report_type}:{url}".encode("utf-8")
     return hashlib.sha256(seed).hexdigest()[:24]
 
 
@@ -69,23 +69,20 @@ class IssuerIRCrawler(BaseSourceAdapter):
         seen_pdf_urls: Set[str] = set()
 
         target_urls = [base_url] + [urljoin(base_url, path) for path in IR_SUBPATHS]
+        url_lock = asyncio.Lock()
 
-        for u in target_urls:
-            if u in visited_urls:
-                continue
-            visited_urls.add(u)
-
+        async def fetch_page(u: str):
             try:
-                r = await self.client.get(u)
+                r = await self.client.get(u, timeout=12.0)
                 if r.status_code != 200:
-                    continue
-
+                    return
                 links = re.findall(r'<a\s+[^>]*href=["\']([^"\']+\.pdf[^"\']*)["\'][^>]*>(.*?)</a>', r.text, re.I | re.DOTALL)
                 for href, anchor_text in links:
                     full_pdf = urljoin(u, href)
-                    if full_pdf in seen_pdf_urls:
-                        continue
-                    seen_pdf_urls.add(full_pdf)
+                    async with url_lock:
+                        if full_pdf in seen_pdf_urls:
+                            continue
+                        seen_pdf_urls.add(full_pdf)
 
                     clean_title = re.sub(r"<[^>]+>", " ", anchor_text).strip()
                     if not clean_title:
@@ -96,11 +93,14 @@ class IssuerIRCrawler(BaseSourceAdapter):
                         continue
 
                     fy, fy_conf, _ = resolve_fy(clean_title)
+                    if not fy:
+                        fy, fy_conf, _ = resolve_fy(href)
+
                     if fy and not (start_year <= fy <= end_year):
                         continue
 
-                    cid = stable_candidate_id(issuer.issuer_id, fy, full_pdf)
-                    candidates.append(Candidate(
+                    cid = stable_candidate_id(issuer.issuer_id, fy, label, full_pdf)
+                    cand = Candidate(
                         candidate_id=cid,
                         issuer_id=issuer.issuer_id,
                         source_name="ISSUER_IR",
@@ -111,8 +111,11 @@ class IssuerIRCrawler(BaseSourceAdapter):
                         classification=label,
                         classification_score=cls_score,
                         direct_pdf_url=full_pdf,
-                    ))
+                    )
+                    async with url_lock:
+                        candidates.append(cand)
             except Exception as e:
                 logger.debug(f"IR crawl error for {issuer.ticker} on {u}: {e}")
 
+        await asyncio.gather(*(fetch_page(u) for u in target_urls))
         return candidates
