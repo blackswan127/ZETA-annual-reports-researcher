@@ -9,3 +9,5 @@ GLOBAL_SUSTAINABILITY_DATABASE/
 dist/
 build/
 *.egg-info/
+input/tmx_current.xlsx
+

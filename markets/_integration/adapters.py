@@ -194,14 +194,12 @@ class IndiaAdapter(BaseMarketAdapter):
 
     async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
         ensure_sys_paths()
-        from india_ar_bulk.source import NSESource, BSESource, current_india_universe
+        from india_ar_bulk.source import BSESource, current_india_universe
         os.environ["INDIA_AR_ACKNOWLEDGE_TERMS"] = "1"
-        n = NSESource(timeout=30.0, retries=3, rps=1.5)
-        b = BSESource(timeout=30.0, retries=3, rps=2.5)
+        b = BSESource(timeout=30.0, retries=3, rps=3.0)
         try:
-            issuers, stats = await current_india_universe(n, b, include_sme=True)
+            issuers, stats = await current_india_universe(b, include_sme=True)
         finally:
-            await n.close()
             await b.close()
 
         if not issuers:
@@ -234,14 +232,14 @@ class IndiaAdapter(BaseMarketAdapter):
                 issuer_id=i.issuer_key,
                 legal_name=i.name,
                 country_iso3="IND",
-                mic="XNSE" if i.nse_symbol else "XBOM",
-                ticker=i.nse_symbol or i.bse_scrip,
+                mic="XBOM" if i.bse_scrip else "XNSE",
+                ticker=i.bse_scrip or i.nse_symbol,
                 isin=i.isin,
                 instrument_type="Equity",
                 active_status="ACTIVE",
                 as_of_date=as_of,
-                secondary_mic="XBOM" if (i.nse_symbol and i.bse_scrip) else "",
-                secondary_ticker=i.bse_scrip if i.nse_symbol else "",
+                secondary_mic="XNSE" if (i.nse_symbol and i.bse_scrip) else "",
+                secondary_ticker=i.nse_symbol if i.bse_scrip else "",
             ))
         return roster
 
@@ -260,11 +258,17 @@ class IndiaAdapter(BaseMarketAdapter):
         end_yr = max(cohort.fiscal_years) if cohort.fiscal_years else 2025
 
         settings = Settings(
-            work_dir, start_yr, end_yr,
-            metadata_workers=6, nse_rps=1.5, bse_rps=2.5,
-            download_workers=8, download_rps=4.0, timeout=45.0, retries=5,
-            chunk_size=1024*1024, include_sme=True, use_bse_fallback=True, deep_bse_fallback=False
+            output_dir=work_dir,
+            start_year=start_yr,
+            end_year=end_yr,
+            metadata_workers=6,
+            bse_rps=3.0,
+            download_workers=8,
+            download_rps=4.0,
+            timeout=45.0,
+            retries=5,
         )
+
         pipe = Pipeline(settings)
         t0 = time.time()
         isins = [i.isin for i in cohort.issuers if i.isin]
@@ -554,15 +558,22 @@ class CanadaAdapter(BaseMarketAdapter):
     async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
         ensure_sys_paths()
         from canada_zeta_bulk.universe import fetch_latest_tmx_list, parse_universe_file
-        # Check if local tmx file exists
-        example_csv = ROOT_DIR / "markets" / "Canada" / "input" / "tmx_current_list.example.csv"
-        if example_csv.exists():
-            issuers = parse_universe_file(example_csv, include_nex=False)
-        else:
+        os.environ["CANADA_AR_ACKNOWLEDGE_TMX_TERMS"] = "1"
+        cached_xlsx = ROOT_DIR / "markets" / "Canada" / "input" / "tmx_current.xlsx"
+        issuers = []
+        if cached_xlsx.exists() and not refresh:
             try:
-                issuers, _ = await fetch_latest_tmx_list(30.0, include_nex=False)
+                issuers = parse_universe_file(cached_xlsx, include_nex=False)
             except Exception:
                 issuers = []
+        if not issuers:
+            try:
+                issuers, _ = await fetch_latest_tmx_list(45.0, include_nex=False)
+            except Exception:
+                example_csv = ROOT_DIR / "markets" / "Canada" / "input" / "tmx_current_list.example.csv"
+                if example_csv.exists():
+                    issuers = parse_universe_file(example_csv, include_nex=False)
+
 
         as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         roster = []

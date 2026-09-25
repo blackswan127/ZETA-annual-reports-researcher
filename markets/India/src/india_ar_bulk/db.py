@@ -63,7 +63,8 @@ class Database:
     def select_best(self,start:int,end:int):
         self.conn.execute("UPDATE candidates SET selected=0")
         slots=self.conn.execute("SELECT issuer_key,fiscal_year FROM expected_slots WHERE fiscal_year BETWEEN ? AND ?",(start,end)).fetchall()
-        priority="CASE source WHEN 'NSE' THEN 5 WHEN 'NSE_SME' THEN 5 WHEN 'BSE_PAGE' THEN 4 WHEN 'BSE_ANN' THEN 3 WHEN 'BSE_LEGACY' THEN 2 ELSE 1 END"
+        priority="CASE source WHEN 'BSE_ANN' THEN 6 WHEN 'BSE_CORP' THEN 6 WHEN 'NSE' THEN 5 WHEN 'NSE_SME' THEN 5 WHEN 'BSE_PAGE' THEN 4 WHEN 'BSE_LEGACY' THEN 2 ELSE 1 END"
+
         for s in slots:
             key,fy=s[0],s[1]
             cs=self.conn.execute(f"SELECT * FROM candidates WHERE issuer_key=? AND fiscal_year=? ORDER BY {priority} DESC, score DESC, CASE file_kind WHEN 'PDF' THEN 2 ELSE 1 END DESC, published_at DESC",(key,fy)).fetchall()

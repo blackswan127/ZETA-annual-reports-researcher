@@ -29,3 +29,16 @@ class Candidate:
     score: int = 0
     selected: bool = False
     note: str = ""
+    xbrl_url: str = ""
+
+@dataclass(frozen=True)
+class AnnualReportMetadata:
+    news_id: str
+    scrip_code: str
+    company_name: str
+    headline: str
+    filing_datetime: str
+    attachment_filename: str
+    pdf_url: str
+    xbrl_url: str | None = None
+
