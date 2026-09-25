@@ -1,4 +1,4 @@
-# Common Integration Contract: Nine Market Annual Reports
+# Common Integration Contract: Ten Market Annual Reports
 
 This document defines the architectural, data, and execution contract across all international market packages in `markets/`:
 - **Australia (ASX)**: `markets/Australia/` (Exchange MIC: `XASX`, ISO3: `AUS`)
@@ -10,6 +10,7 @@ This document defines the architectural, data, and execution contract across all
 - **Singapore (SGX)**: `markets/Singapore/` (Exchange MIC: `XSES`, ISO3: `SGP`)
 - **Sri Lanka (CSE)**: `markets/SriLanka/` (Exchange MIC: `XCOL`, ISO3: `LKA`)
 - **Pan-Africa (16 Markets)**: `markets/Africa/` (Covering South Africa [`XJSE`], Nigeria [`XNSA`], Kenya [`XNAI`], Ghana [`XGHA`], Botswana [`XBOT`], Zambia [`XLUS`], Tanzania [`XDAR`], Zimbabwe [`XZIM`], Mauritius [`XMAU`], Namibia [`XNAM`], Uganda [`XUGA`], Malawi [`XMSW`], Rwanda [`XRWA`], Eswatini [`XSWA`], Seychelles [`XMSX`], Sierra Leone [`XSLS`])
+- **Middle East (8 Markets)**: `markets/MiddleEast/` (Covering Oman [`XMUS`], Jordan [`XAMM`], UAE Dubai [`XDFM`], UAE Abu Dhabi [`XADS`], Saudi Arabia [`XSAU`], Qatar [`DSMD`], Bahrain [`XBAH`], Kuwait [`XKUW`]; strictly excluding Palestine and Israel)
 
 ---
 

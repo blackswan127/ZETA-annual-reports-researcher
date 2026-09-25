@@ -63,3 +63,14 @@ NGA,XNSA,TEST2,Test Nigeria PLC,,02920084323281141784
         assert issuers[0].isin == "KE1234567890"
         assert issuers[1].ticker == "TEST2"
         assert issuers[1].lei == "02920084323281141784"
+
+
+def test_all_16_countries_present_in_universe():
+    issuers = load_universe()
+    countries = {i.country_iso3 for i in issuers}
+    expected_16 = {
+        "ZAF", "NGA", "KEN", "GHA", "BWA", "ZMB", "TZA", "ZWE",
+        "MUS", "NAM", "UGA", "MWI", "RWA", "SWZ", "SYC", "SLE",
+    }
+    assert expected_16.issubset(countries), f"Missing countries: {expected_16 - countries}"
+    assert len(issuers) >= 50

@@ -39,6 +39,7 @@ def ensure_sys_paths():
         str(ROOT_DIR / "markets" / "Singapore" / "src"),
         str(ROOT_DIR / "markets" / "SriLanka" / "src"),
         str(ROOT_DIR / "markets" / "Africa" / "src"),
+        str(ROOT_DIR / "markets" / "MiddleEast" / "src"),
     ]
     for p in paths:
         if p not in sys.path:
@@ -636,6 +637,8 @@ class CanadaAdapter(BaseMarketAdapter):
         as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         roster = []
         for i in issuers:
+            if not i.eligible:
+                continue
             roster.append(CurrentIssuerRecord(
                 issuer_id=i.issuer_key,
                 legal_name=i.name,
@@ -1215,9 +1218,11 @@ class AfricaAdapter(BaseMarketAdapter):
     ) -> List[SlotResult]:
         from africa_ar_bulk.downloader import Downloader
         from africa_ar_bulk.models import Issuer as AfricaIssuer
+        from africa_ar_bulk.sources.african_financials import AfricanFinancialsAdapter
         from africa_ar_bulk.sources.exchange_direct import DirectExchangeAdapter
 
         results: List[SlotResult] = []
+        af_adapter = AfricanFinancialsAdapter()
         direct_adapter = DirectExchangeAdapter()
         downloader = Downloader(workers=8, rps=4.0)
         staging_dir = self.staging_dir
@@ -1236,36 +1241,198 @@ class AfricaAdapter(BaseMarketAdapter):
             )
             min_fy = min(cohort.fiscal_years)
             max_fy = max(cohort.fiscal_years)
+            candidates = []
             try:
-                candidates = await direct_adapter.discover_candidates(aff_iss, min_fy, max_fy)
+                c1 = await af_adapter.discover_candidates(aff_iss, min_fy, max_fy)
+                candidates.extend(c1)
+            except Exception:
+                pass
+            try:
+                c2 = await direct_adapter.discover_candidates(aff_iss, min_fy, max_fy)
+                candidates.extend(c2)
+            except Exception:
+                pass
+
+            by_fy_and_type: dict[tuple[int, str], Any] = {}
+            for cand in candidates:
+                if cand.resolved_fy:
+                    key = (cand.resolved_fy, cand.classification)
+                    if key not in by_fy_and_type or cand.fy_confidence > by_fy_and_type[key].fy_confidence:
+                        by_fy_and_type[key] = cand
+
+            target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR"]
+
+            issuer_results = []
+            for fy in cohort.fiscal_years:
+                for rtype in target_types:
+                    cand = by_fy_and_type.get((fy, rtype))
+                    slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
+                    if not cand or not cand.direct_pdf_url:
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            status="UNRESOLVED",
+                            reason=f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy} {rtype}",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                        continue
+
+                    temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
+                    try:
+                        _ = await downloader.get(cand.direct_pdf_url, temp_pdf)
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=temp_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            lang="EN",
+                            report_type=rtype,
+                        )
+                        temp_pdf.unlink(missing_ok=True)
+                        h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            source_url=cand.direct_pdf_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    except Exception as e:
+                        temp_pdf.unlink(missing_ok=True)
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            status="FAILED",
+                            reason=f"Download/validation error: {str(e)}",
+                            source_url=cand.direct_pdf_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+            return issuer_results
+
+        try:
+            batch_results = await asyncio.gather(*(process_issuer(iss) for iss in cohort.issuers))
+            for res_list in batch_results:
+                results.extend(res_list)
+        finally:
+            await af_adapter.close()
+            await direct_adapter.close()
+            await downloader.close()
+
+        return results
+
+
+class MiddleEastAdapter(BaseMarketAdapter):
+    def __init__(self):
+        super().__init__("MiddleEast")
+
+    async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
+        from me_ar_bulk.sources.universe import load_universe
+        issuers = load_universe(local_dir=ROOT_DIR / "local")
+        roster: List[CurrentIssuerRecord] = []
+        now_str = datetime.now(timezone.utc).isoformat()
+        for iss in issuers:
+            roster.append(CurrentIssuerRecord(
+                issuer_id=iss.issuer_id,
+                legal_name=iss.company_name,
+                country_iso3=iss.iso3,
+                mic=iss.mic,
+                ticker=iss.ticker,
+                isin=iss.isin or "",
+                lei=iss.lei or "",
+                instrument_type="Equity",
+                active_status="ACTIVE" if iss.active else "SUSPENDED",
+                as_of_date=now_str,
+                source_url=iss.universe_source or "",
+            ))
+        return roster
+
+    async def harvest_cohort(
+        self,
+        cohort: CohortManifest,
+        output_corpus: Path,
+    ) -> List[SlotResult]:
+        from me_ar_bulk.downloader import Downloader
+        from me_ar_bulk.models import Issuer as MEIssuer
+        from me_ar_bulk.sources.exchange_direct import DirectExchangeAdapter
+
+        results: List[SlotResult] = []
+        direct_adapter = DirectExchangeAdapter()
+        downloader = Downloader(workers=8, rps=4.0)
+        staging_dir = self.staging_dir
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        async def process_issuer(issuer: CurrentIssuerRecord) -> List[SlotResult]:
+            t0 = time.time()
+            me_iss = MEIssuer(
+                issuer_id=issuer.issuer_id,
+                iso3=issuer.country_iso3,
+                mic=issuer.mic,
+                ticker=issuer.ticker,
+                company_name=issuer.legal_name,
+                isin=issuer.isin,
+                lei=issuer.lei,
+            )
+            min_fy = min(cohort.fiscal_years)
+            max_fy = max(cohort.fiscal_years)
+            try:
+                candidates = await direct_adapter.discover_candidates(me_iss, min_fy, max_fy)
             except Exception:
                 candidates = []
 
+            # Prioritize AR_FULL candidates
             by_fy: dict[int, Any] = {}
             for cand in candidates:
-                if cand.resolved_fy and (cand.resolved_fy not in by_fy or cand.fy_confidence > by_fy[cand.resolved_fy].fy_confidence):
-                    by_fy[cand.resolved_fy] = cand
+                if cand.resolved_fy:
+                    is_full = (cand.document_class == "AR_FULL")
+                    curr = by_fy.get(cand.resolved_fy)
+                    if not curr:
+                        by_fy[cand.resolved_fy] = cand
+                    elif not (curr.document_class == "AR_FULL") and is_full:
+                        by_fy[cand.resolved_fy] = cand
+                    elif curr.document_class == cand.document_class and cand.fy_confidence > curr.fy_confidence:
+                        by_fy[cand.resolved_fy] = cand
 
             issuer_results = []
             for fy in cohort.fiscal_years:
                 cand = by_fy.get(fy)
                 rtype = "AR"
                 slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
-                if not cand or not cand.direct_pdf_url:
+
+                # Invariant: Only AR_FULL satisfies final ZETA slot
+                if not cand or cand.document_class != "AR_FULL" or not (cand.direct_url or cand.source_url):
+                    reason = "No AR_FULL candidate filing found (components cannot satisfy AR slot)" if cand else f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy}"
                     issuer_results.append(SlotResult(
                         slot_id=slot_id,
                         run_id=cohort.run_id,
                         issuer_id=issuer.issuer_id,
                         fiscal_year=fy,
                         status="UNRESOLVED",
-                        reason=f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy}",
+                        reason=reason,
                         elapsed_seconds=round(time.time() - t0, 2),
                     ))
                     continue
 
+                url = cand.direct_url or cand.source_url
                 temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
                 try:
-                    _ = await downloader.get(cand.direct_pdf_url, temp_pdf)
+                    _ = await downloader.get(url, temp_pdf)
                     status, reason, final_path = promote_pdf_to_corpus(
                         source_pdf=temp_pdf,
                         output_root=output_corpus,
@@ -1293,7 +1460,7 @@ class AfricaAdapter(BaseMarketAdapter):
                         page_count=pages,
                         file_size_bytes=sz,
                         destination_path=str(final_path),
-                        source_url=cand.direct_pdf_url,
+                        source_url=url,
                         elapsed_seconds=round(time.time() - t0, 2),
                     ))
                 except Exception as e:
@@ -1305,7 +1472,7 @@ class AfricaAdapter(BaseMarketAdapter):
                         fiscal_year=fy,
                         status="FAILED",
                         reason=f"Download/validation error: {str(e)}",
-                        source_url=cand.direct_pdf_url,
+                        source_url=url,
                         elapsed_seconds=round(time.time() - t0, 2),
                     ))
             return issuer_results
@@ -1333,6 +1500,7 @@ def get_market_adapter(market_name: str) -> BaseMarketAdapter:
         "NewZealand": NewZealandAdapter,
         "SriLanka": SriLankaAdapter,
         "Africa": AfricaAdapter,
+        "MiddleEast": MiddleEastAdapter,
     }
     if norm not in adapters:
         raise ValueError(f"No adapter available for market '{market_name}'")

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "middle-east-ar-bulk"
+version = "0.2.0"
+description = "Production-grade annual reports extractor for core Middle Eastern equity markets (excluding Palestine & Israel)"
+authors = [{ name = "ZETA Autonomous Harvester Team" }]
+requires-python = ">=3.9"
+dependencies = [
+    "httpx>=0.24.0",
+    "pypdf>=3.9.0",
+    "pymupdf>=1.23.0",
+]
+
+[project.scripts]
+me-ar = "me_ar_bulk.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

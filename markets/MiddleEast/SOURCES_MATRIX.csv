@@ -1,0 +1,9 @@
+country,iso3,mic,exchange,english_mode,primary_discovery,primary_object,full_ar_policy,repair_source
+Oman,OMN,XMUS,Muscat Stock Exchange,CORE_ENGLISH,MSX Financial Reports,AR EN,Explicit AR EN qualifies after FY/PDF validation,Issuer IR missing-only
+Jordan,JOR,XAMM,Amman Stock Exchange,CORE_ENGLISH,ASE Annual Financial Report disclosures,Annual Financial Report,Inspect attachment; statements-only becomes component,Issuer IR missing-only
+United Arab Emirates,ARE,XDFM,Dubai Financial Market,CORE_ENGLISH,DFM document/disclosure feed,Annual Report PDF,Explicit Annual Report qualifies,Issuer IR missing-only
+United Arab Emirates,ARE,XADS,Abu Dhabi Securities Exchange,CORE_ENGLISH,ADX listed-company disclosures/CDN,Annual Report/financial report attachment,Require full-report title/content,Issuer IR missing-only
+Saudi Arabia,SAU,XSAU,Saudi Exchange,CORE_BILINGUAL,Issuer profile Financials -> Annual Report,English Annual Report attachment,English attachment + full-report validation,Issuer IR missing-only
+Qatar,QAT,DSMD,Qatar Stock Exchange,CORE_ENGLISH,QSE Financial Statements annual column + Q-Disclosure,Annual filing/statement,Statements-only component; full report required separately,Issuer IR full-AR repair
+Bahrain,BHR,XBAH,Bahrain Bourse,CORE_ENGLISH,Company profile annual statements/disclosures,Annual financial statements,Statements-only component; full report required separately,Exchange disclosures then issuer IR
+Kuwait,KWT,XKUW,Boursa Kuwait,CORE_BILINGUAL,IFSah Annual English filing,Annual financial statements,Statements-only component unless full annual report package,Issuer IR full-AR repair

@@ -66,3 +66,74 @@ async def test_pipeline_staging_and_audit(dummy_pdf_bytes):
             assert (work_dir / "audit" / "issuers.csv").exists()
         finally:
             pipe.close()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_multi_report_ar_and_sr(dummy_pdf_bytes):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        work_dir = root / "local"
+        zeta_root = root / "GLOBAL_SUSTAINABILITY_DATABASE"
+
+        cfg = RuntimeConfig(
+            work_dir=work_dir,
+            zeta_root=zeta_root,
+            start_year=2023,
+            end_year=2023,
+            min_pdf_bytes=1000,
+        )
+
+        pipe = AfricaPipeline(cfg)
+        try:
+            issuers = pipe.stage_universe(country_iso3="NGA", limit=1, report_types=("AR", "SR"))
+            assert len(issuers) == 1
+            iss = issuers[0]
+
+            # Stage AR file
+            target_ar = build_final_path(zeta_root, iss.country_iso3, iss.exchange_mic, iss.lei or "", iss.isin or "", iss.ticker, 2023, report_type="AR")
+            if not target_ar:
+                target_ar = build_staging_path(work_dir / "staging", iss.country_iso3, iss.exchange_mic, iss.ticker, 2023, report_type="AR")
+            target_ar.parent.mkdir(parents=True, exist_ok=True)
+            target_ar.write_bytes(dummy_pdf_bytes)
+
+            # Stage SR file
+            target_sr = build_final_path(zeta_root, iss.country_iso3, iss.exchange_mic, iss.lei or "", iss.isin or "", iss.ticker, 2023, report_type="SR")
+            if not target_sr:
+                target_sr = build_staging_path(work_dir / "staging", iss.country_iso3, iss.exchange_mic, iss.ticker, 2023, report_type="SR")
+            target_sr.parent.mkdir(parents=True, exist_ok=True)
+            target_sr.write_bytes(dummy_pdf_bytes)
+
+            # Add AR and SR candidates
+            pipe.db.add_candidate(Candidate(
+                candidate_id="cand_nga_ar_2023",
+                issuer_id=iss.issuer_id,
+                source_name="AFRICAN_FINANCIALS",
+                source_url="https://example.com/ar.pdf",
+                title=f"{iss.company_name} Annual Report 2023",
+                resolved_fy=2023,
+                fy_confidence=0.99,
+                classification="AR",
+                classification_score=0.95,
+                direct_pdf_url="https://example.com/ar.pdf",
+            ))
+            pipe.db.add_candidate(Candidate(
+                candidate_id="cand_nga_sr_2023",
+                issuer_id=iss.issuer_id,
+                source_name="AFRICAN_FINANCIALS",
+                source_url="https://example.com/sr.pdf",
+                title=f"{iss.company_name} Sustainability Report 2023",
+                resolved_fy=2023,
+                fy_confidence=0.99,
+                classification="SR",
+                classification_score=0.90,
+                direct_pdf_url="https://example.com/sr.pdf",
+            ))
+
+            downloaded = await pipe.download()
+            assert downloaded == 2
+
+            stats = pipe.audit()
+            assert stats["total_slots"] == 2
+            assert (stats["done_slots"] + stats["staged_slots"]) == 2
+        finally:
+            pipe.close()

@@ -53,6 +53,11 @@ def test_market_resolution():
         ("SouthAfrica", "ZAF", "XJSE"),
         ("Nigeria", "ZAF", "XJSE"),
         ("Kenya", "ZAF", "XJSE"),
+        ("MiddleEast", "OMN", "XMUS"),
+        ("Oman", "OMN", "XMUS"),
+        ("Jordan", "OMN", "XMUS"),
+        ("SaudiArabia", "OMN", "XMUS"),
+        ("DFM", "OMN", "XMUS"),
     ]
     for raw, exp_iso3, exp_mic in cases:
         info = resolve_market_info(raw)
@@ -249,4 +254,42 @@ def test_get_market_adapter_africa():
     assert res["market"] == "Africa"
     assert res["count"] == 20
     assert res["fiscal_years"] == [2023]
+
+
+def test_get_market_adapter_middle_east():
+    from markets._integration.adapters import get_market_adapter, MiddleEastAdapter
+    adapter = get_market_adapter("MiddleEast")
+    assert isinstance(adapter, MiddleEastAdapter)
+    adapter_oman = get_market_adapter("Oman")
+    assert isinstance(adapter_oman, MiddleEastAdapter)
+    adapter_saudi = get_market_adapter("SaudiArabia")
+    assert isinstance(adapter_saudi, MiddleEastAdapter)
+    adapter_dfm = get_market_adapter("DFM")
+    assert isinstance(adapter_dfm, MiddleEastAdapter)
+
+    # Test directive parsing
+    res = parse_plain_english_directive("harvest 25 companies from Oman for FY2023")
+    assert res["market"] == "MiddleEast"
+    assert res["count"] == 25
+    assert res["fiscal_years"] == [2023]
+
+    res2 = parse_plain_english_directive("download 10 issuers in Saudi Arabia for FY2024")
+    assert res2["market"] == "MiddleEast"
+    assert res2["count"] == 10
+    assert res2["fiscal_years"] == [2024]
+
+
+def test_middle_east_exclusions():
+    # User directive: ignore palestine & israel
+    with pytest.raises(ValueError, match="excluded"):
+        resolve_market_info("Palestine")
+
+    with pytest.raises(ValueError, match="excluded"):
+        resolve_market_info("Israel")
+
+    with pytest.raises(ValueError, match="excluded"):
+        parse_plain_english_directive("harvest 10 companies from Palestine for FY2024")
+
+    with pytest.raises(ValueError, match="excluded"):
+        parse_plain_english_directive("download issuers in Israel")
 

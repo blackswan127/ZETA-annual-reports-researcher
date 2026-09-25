@@ -1,0 +1,9 @@
+market,country,mic,centralized_source,english_verified,direct_pdf_verified,2017_history_verified,true_ar_strength,component_risk,production_assessment,recommended_role
+Muscat Stock Exchange,Oman,XMUS,MSX Financial Reports,YES,YES via AR EN links,PARTIAL,HIGH,LOW,9.2/10,Wave-1 primary
+Amman Stock Exchange,Jordan,XAMM,ASE Disclosures - Annual Financial Report,YES site; document language validate,YES,YES,MEDIUM,MEDIUM,8.8/10,Wave-1 primary
+Dubai Financial Market,UAE,XDFM,DFM document feed,YES,YES,YES source archive,VERY HIGH,LOW,9.1/10,Wave-1/2 primary
+Abu Dhabi Securities Exchange,UAE,XADS,ADX Listed Companies Disclosures/CDN,YES,YES,PARTIAL,VERY HIGH,LOW-MEDIUM,8.9/10,Wave-2 primary
+Saudi Exchange,Saudi Arabia,XSAU,Issuer company profile Financials/Annual Report,YES bilingual system,YES,PARTIAL,HIGH,MEDIUM,8.6/10,Wave-2 primary
+Qatar Stock Exchange,Qatar,DSMD,QSE Financial Statements Annual column + Q-Disclosure,YES,YES,YES annual FS history,HIGH-MEDIUM,HIGH,8.1/10,Wave-2 component-aware
+Bahrain Bourse,Bahrain,XBAH,Company profiles + disclosures,YES,YES,YES,MEDIUM,HIGH,7.8/10,Wave-3 component-aware
+Boursa Kuwait,Kuwait,XKUW,IFSah English financial statements/disclosures,YES,YES,YES,MEDIUM,HIGH,7.5/10,Wave-3 component-aware

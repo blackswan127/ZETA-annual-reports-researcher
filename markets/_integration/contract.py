@@ -27,11 +27,24 @@ MARKET_DEFAULTS = {
             "SIERRALEONE", "SIERRA LEONE",
         ],
     },
+    "MiddleEast": {
+        "iso3": "OMN",
+        "mic": "XMUS",
+        "aliases": [
+            "MIDDLEEAST", "MIDDLE EAST", "ME", "OMAN", "JORDAN", "UAE", "DUBAI", "DFM",
+            "ABUDHABI", "ABU DHABI", "ADX", "SAUDI", "SAUDIARABIA", "SAUDI ARABIA",
+            "TADAWUL", "QATAR", "QSE", "BAHRAIN", "KUWAIT", "BOURSAKUWAIT",
+        ],
+    },
 }
+
+EXCLUDED_MARKETS = {"PALESTINE", "PSE", "PEX", "XPSX", "ISRAEL", "ISR", "TASE", "XTAE"}
 
 
 def resolve_market_info(market_name: str) -> Dict[str, Any]:
     norm = market_name.strip().upper().replace(" ", "")
+    if norm in EXCLUDED_MARKETS:
+        raise ValueError(f"Market '{market_name}' is explicitly excluded by directive.")
     for canonical, info in MARKET_DEFAULTS.items():
         if canonical.upper() == norm:
             return {"name": canonical, **info}

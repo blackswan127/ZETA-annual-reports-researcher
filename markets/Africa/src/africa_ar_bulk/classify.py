@@ -15,6 +15,17 @@ STRONG_ANNUAL_PATTERNS = [
     r"\bannual\s+financial\s+statements\b",
 ]
 
+SUSTAINABILITY_PATTERNS = [
+    r"\bsustainability\s+report\b",
+    r"\besg\s+report\b",
+    r"\bcorporate\s+social\s+responsibility\s+report\b",
+    r"\bcsr\s+report\b",
+    r"\bclimate\s+(?:change\s+)?report\b",
+    r"\bsustainability\s+review\b",
+    r"\bsustainability\s+(?:and|&)\s+governance\s+report\b",
+    r"\benvironmental(?:,|\s+and)?\s+social(?:,|\s+and)?\s+governance\b",
+]
+
 EXCLUDE_PATTERNS = [
     r"\bhalf[- ]?year(?:ly)?\b",
     r"\binterim\b",
@@ -31,16 +42,15 @@ EXCLUDE_PATTERNS = [
     r"\bdividend\s+announcement\b",
     r"\bpresentation\b",
     r"\bfactsheet\b",
-    r"\bsustainability\s+report\b",
-    r"\besg\s+report\b",
     r"\bcorporate\s+governance\s+report\b",
     r"\bunaudited\b",
 ]
 
 
 def classify_document(title: str, url: str = "", page_count: Optional[int] = None) -> Tuple[bool, str, float]:
-    """Classify whether a title/document represents a genuine statutory annual report.
-    Returns: (is_ar, classification_label, confidence_score)
+    """Classify whether a title/document represents a genuine statutory annual report or sustainability report.
+    Returns: (is_valid, classification_label, confidence_score)
+    where classification_label is 'AR', 'SR', or 'OTHER'.
     """
     text = f"{title} {url}".strip().lower()
 
@@ -53,7 +63,21 @@ def classify_document(title: str, url: str = "", page_count: Optional[int] = Non
                     break
             return False, "OTHER", -100.0
 
-    # 2. Check positive indicators
+    # 2. Check sustainability / ESG patterns
+    for spat in SUSTAINABILITY_PATTERNS:
+        if re.search(spat, text):
+            # If it's an explicit integrated annual report, prioritize AR
+            if "integrated annual report" in text or "annual integrated report" in text:
+                break
+            score = 90.0
+            if page_count is not None:
+                if page_count >= 20:
+                    score += 10.0
+                elif page_count <= 5:
+                    score -= 35.0
+            return score >= 50.0, "SR", min(100.0, max(0.0, score))
+
+    # 3. Check positive annual report indicators
     score = 0.0
     for pat in STRONG_ANNUAL_PATTERNS:
         if re.search(pat, text):
@@ -68,7 +92,7 @@ def classify_document(title: str, url: str = "", page_count: Optional[int] = Non
         else:
             return False, "OTHER", 0.0
 
-    # 3. Page count heuristic
+    # 4. Page count heuristic
     if page_count is not None:
         if page_count >= 40:
             score += 10.0

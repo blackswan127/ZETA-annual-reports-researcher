@@ -29,8 +29,6 @@ def test_negative_exclusions():
         "Abridged Audited Financial Results 2022",
         "Press Release - Annual Results 2021",
         "Dividend Announcement FY2023",
-        "Sustainability Report 2023",
-        "ESG Report and Climate Disclosures 2022",
         "Corporate Governance Report 2024",
         "Investor Presentation FY2023",
     ]
@@ -39,3 +37,18 @@ def test_negative_exclusions():
         assert is_ar is False, f"Failed negative exclusion: {title}"
         assert label == "OTHER"
         assert score < 50.0
+
+
+def test_sustainability_and_esg_classification():
+    sustainability_samples = [
+        "Sustainability Report 2023",
+        "ESG Report and Climate Disclosures 2022",
+        "Corporate Social Responsibility Report 2021",
+        "Sustainability Review 2020",
+        "Annual Sustainability and Governance Report 2024",
+    ]
+    for title in sustainability_samples:
+        is_valid, label, score = classify_document(title)
+        assert is_valid is True, f"Failed sustainability match: {title}"
+        assert label == "SR"
+        assert score >= 50.0
