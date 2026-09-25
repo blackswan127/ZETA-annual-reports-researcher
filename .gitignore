@@ -29,3 +29,6 @@ annualreports-review.csv
 annualreports-unresolved.csv
 annualreports-content-review.csv
 node_modules/
+markets/**/output/
+markets/**/verification_output/
+markets/**/live_verification_*/

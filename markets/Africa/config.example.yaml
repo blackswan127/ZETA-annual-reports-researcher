@@ -1,0 +1,29 @@
+project:
+  name: Africa AR
+  start_fy: 2017
+  end_fy: 2025
+  language: EN
+  zeta_root: "E:/GLOBAL_SUSTAINABILITY_DATABASE"
+runtime:
+  discovery_global_concurrency: 16
+  pdf_workers: 16
+  default_per_host_concurrency: 2
+  default_rps: 1.0
+  retry_attempts: 5
+  minimum_pdf_bytes: 50000
+policies:
+  respect_retry_after: true
+  repeated_403_state: SOURCE_BLOCKED
+  allow_identifier_guessing: false
+  publication_year_equals_fy: false
+  require_pdf_validation: true
+  require_sha256: true
+  overwrite_verified_files: false
+  ir_crawl_missing_only: true
+source_priority:
+  - authorized_aggregator
+  - official_exchange
+  - licensed_exchange_feed
+  - issuer_ir
+  - manual_review
+markets_csv: "SOURCES_MATRIX.csv"

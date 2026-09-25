@@ -1,0 +1,6 @@
+{"data":{"prices":[
+ {"nc":"S68","n":"SGX","type":"stocks","m":"MAINBOARD"},
+ {"nc":"D05","n":"DBS","type":"stocks","m":"MAINBOARD"},
+ {"nc":"ETF1","n":"FAKE ETF","type":"etf","m":"MAINBOARD"},
+ {"nc":"ZZZ","n":"OTC","type":"stocks","m":"GLOBALQUOTE"}
+]}}

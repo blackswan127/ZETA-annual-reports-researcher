@@ -1,0 +1,8 @@
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS issuers (issuer_id TEXT PRIMARY KEY,country_iso3 TEXT NOT NULL,exchange_mic TEXT NOT NULL,ticker TEXT NOT NULL,company_name TEXT NOT NULL,isin TEXT,lei TEXT,fiscal_year_end TEXT,active INTEGER NOT NULL DEFAULT 1,source_url TEXT,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS expected_slots (issuer_id TEXT NOT NULL,fiscal_year INTEGER NOT NULL,report_type TEXT NOT NULL DEFAULT 'AR',status TEXT NOT NULL DEFAULT 'PENDING',PRIMARY KEY (issuer_id,fiscal_year,report_type));
+CREATE TABLE IF NOT EXISTS candidates (candidate_id TEXT PRIMARY KEY,issuer_id TEXT NOT NULL,source_name TEXT NOT NULL,source_url TEXT NOT NULL,title TEXT,publication_date TEXT,resolved_fy INTEGER,fy_confidence REAL,classification TEXT,classification_score REAL,direct_pdf_url TEXT,discovered_at TEXT NOT NULL,UNIQUE (issuer_id,source_url));
+CREATE TABLE IF NOT EXISTS downloads (candidate_id TEXT PRIMARY KEY,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,bytes_downloaded INTEGER NOT NULL DEFAULT 0,http_status INTEGER,content_type TEXT,sha256 TEXT,local_path TEXT,error TEXT,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS source_profiles (source_key TEXT PRIMARY KEY,host TEXT NOT NULL,adapter TEXT NOT NULL,requests_per_second REAL NOT NULL DEFAULT 1.0,max_concurrency INTEGER NOT NULL DEFAULT 2,health TEXT NOT NULL DEFAULT 'UNKNOWN',last_success TEXT,last_failure TEXT,consecutive_failures INTEGER NOT NULL DEFAULT 0,terms_reviewed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT,ts TEXT NOT NULL,issuer_id TEXT,fiscal_year INTEGER,event_type TEXT NOT NULL,details TEXT);

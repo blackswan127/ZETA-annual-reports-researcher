@@ -1,0 +1,22 @@
+CANADA ZETA ANNUAL REPORTS — START HERE
+=======================================
+Target: CURRENT TSX + TSXV operating companies, FY2017-FY2025 Annual Reports.
+
+1) Run install_windows.bat
+2) Download the official current TSX/TSXV issuer list from TMX Listed Company Directory.
+3) Optional: prepare input\identity_overrides.csv from the example.
+4) Optional production source: prepare an AUTHORIZED SEDAR+ DDS manifest/delivery.
+5) Run run_smoke_test.bat
+6) Run run_all_2017_2025.bat
+7) Inspect work\audit\coverage.csv and repair_queue.csv
+8) Run run_repair_missing.bat until gaps are explained/resolved.
+
+FINAL ZETA FORMAT
+GLOBAL_SUSTAINABILITY_DATABASE\CAN\XTSE-or-XTSX\LEI_ISIN_Ticker\FYyyyy\
+LEI_CAN_ExchangeMIC_Ticker_ISIN_FYyyyy_AR_EN.pdf
+
+IMPORTANT
+- The project NEVER scrapes the SEDAR+ public website.
+- Final ZETA placement requires verified LEI + ISIN + ticker + exchange MIC.
+- Missing identifiers stay staged; they are not invented.
+- Put work\ on local disk. Point --zeta-root to E:\ / mounted Google Drive if desired.

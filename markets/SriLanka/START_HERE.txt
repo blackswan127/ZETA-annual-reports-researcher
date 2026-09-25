@@ -1,0 +1,8 @@
+SRI LANKA CSE ZETA DOWNLOADER
+
+1. install_windows.bat
+2. run_smoke_test.bat
+3. Review work_smoke\audit\coverage.csv
+4. Add verified identifiers to identity_overrides_TEMPLATE.csv
+5. run_all_2017_2025.bat
+6. run_repair_missing.bat

@@ -1,0 +1,7 @@
+{"meta":{"totalPages":1,"totalItems":5},"data":[
+ {"companyName":"SINGAPORE EXCHANGE LIMITED","ibmCode":"1J26","market":"MAINBOARD"},
+ {"companyName":"DBS GROUP HOLDINGS LTD","ibmCode":"1D05","market":"MAINBOARD"},
+ {"companyName":"SAMPLE REIT","ibmCode":"2D63","market":"MAINBOARD"},
+ {"companyName":"SAMPLE ETF","ibmCode":"1ETF","market":"MAINBOARD"},
+ {"companyName":"OUTSIDE MARKET","ibmCode":"1OUT","market":"GLOBAL_QUOTE"}
+]}

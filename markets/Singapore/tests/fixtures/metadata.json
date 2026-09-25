@@ -1,0 +1,6 @@
+{"data":[
+ {"stockCode":"S68","ibmCode":"1J26","issuerName":"SINGAPORE EXCHANGE LIMITED"},
+ {"stockCode":"D05","ibmCode":"1D05","issuerName":"DBS GROUP HOLDINGS LTD"},
+ {"stockCode":"ETF1","ibmCode":"1ETF","issuerName":"FAKE ETF"},
+ {"stockCode":"ZZZ","ibmCode":"1ZZZ","issuerName":"FAKE GLOBAL QUOTE"}
+]}
