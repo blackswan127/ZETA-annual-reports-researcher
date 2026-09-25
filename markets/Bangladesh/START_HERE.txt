@@ -1,0 +1,15 @@
+DSE ZETA Annual Reports Bulk Downloader — START HERE
+
+Target: current Dhaka Stock Exchange EQUITY issuers, FY2017-FY2025.
+ZETA path: GLOBAL_SUSTAINABILITY_DATABASE\BGD\XDHA\LEI_ISIN_Ticker\FYyyyy\...
+
+WINDOWS
+1) Extract to D: or E:.
+2) Run install_windows.bat.
+3) Run run_smoke_test.bat.
+4) Run run_all_2017_2025.bat.
+5) Check work\audit\coverage.csv.
+6) Add missing LEI/ISIN to templates\identity_overrides.csv (copy/edit it for your run).
+7) Run run_repair_missing.bat.
+
+The downloader does not fabricate LEI/ISIN. Reports with incomplete identity are retained under work\staging\unresolved_identity until identifiers are verified.

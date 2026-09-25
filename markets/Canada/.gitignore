@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+work/
+smoke_work/
+smoke_zeta/
+GLOBAL_SUSTAINABILITY_DATABASE/
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,18 @@
+SGX CURRENT-LISTED ANNUAL REPORTS BULK DOWNLOADER
+=================================================
+
+Default target: fiscal years 2017-2025, current SGX Mainboard/Catalist stock issuers.
+
+WINDOWS:
+1) Double-click install_windows.bat
+2) Double-click run_smoke_test.bat
+3) Double-click run_all_2017_2025.bat
+
+Use run_fast_2017_2025.bat only after the normal run works reliably.
+
+Results:
+  output\pdfs\       downloaded annual-report PDFs
+  output\audit\      CSV coverage/failure reports
+  output\manifest.sqlite3  resumable state database
+
+Rerun the same batch file after interruption; completed valid PDFs are skipped.

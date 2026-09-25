@@ -1,0 +1,11 @@
+INDIA ANNUAL REPORTS BULK DOWNLOADER — START HERE
+
+Target: current NSE/BSE companies, fiscal-year end 2017 through 2025.
+
+1) Read README.md, especially the exchange terms/access section.
+2) Run install_windows.bat
+3) Run run_smoke_test.bat
+4) Only after PASS, run run_all_2017_2025.bat
+5) Review output\audit\missing.csv after completion.
+
+Do not simply add NSE and BSE company counts; the project deduplicates dual-listed issuers by ISIN.

@@ -1,0 +1,10 @@
+# Reference defaults; CLI flags override these values.
+start_year = 2017
+end_year = 2025
+discovery_workers = 5
+download_workers = 8
+request_delay_seconds = 0.35
+max_retries = 5
+minimum_pdf_bytes = 8000
+country_iso3 = "BGD"
+exchange_mic = "XDHA"

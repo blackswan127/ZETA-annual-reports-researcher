@@ -1,0 +1,14 @@
+NEW ZEALAND NZX ZETA ANNUAL REPORT BULK DOWNLOADER
+==================================================
+Target: CURRENT NZX equity issuers, FY2017-FY2025.
+Final ZETA path: GLOBAL_SUSTAINABILITY_DATABASE/NZL/XNZE/LEI_ISIN_Ticker/FYyyyy/*.pdf
+
+1) Run install_windows.bat
+2) Run run_smoke_test.bat
+3) Prepare templates/identity_overrides.csv if LEIs are missing
+4) If you have licensed/authorized NZX historical data, normalize it to templates/authorized_nzx_manifest.csv
+5) Run run_all_2017_2025.bat
+6) Review work/audit/coverage.csv, identity_missing.csv, and repair_queue.csv
+7) Run run_repair_missing.bat as needed
+
+IMPORTANT: NZX public website terms restrict use/copying of website content. For commercial or very large-scale data use, obtain NZX data licensing/Company Research Centre/i-search access. The software does not bypass access controls.
