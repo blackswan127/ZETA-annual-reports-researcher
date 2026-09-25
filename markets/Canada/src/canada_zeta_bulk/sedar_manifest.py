@@ -19,18 +19,27 @@ ALIASES = {
     "isin": ["isin","isin_number"],
     "lei": ["lei","legal_entity_identifier"],
     "title": ["document_type","document_title","title","document_name","filing_type"],
-    "url": ["document_url","download_url","url","file_url","href","document_path","file_path","path"],
+    "url": ["document_url","download_url","url","file_url","href","document_path","file_path","path","link"],
     "period_end": ["period_end","report_period_end","fiscal_year_end","year_end"],
-    "published": ["filing_date","published_date","publication_date","date_filed"],
+    "published": ["filing_date","published_date","publication_date","date_filed","submitted_date"],
     "language": ["language","lang"],
     "document_id": ["document_id","filing_id","record_id","id"],
 }
+
+def extract_document_id(url: str) -> str:
+    if not url:
+        return ""
+    m = re.search(r"document(?:\.html)?(?:\?id=|/)([a-z0-9_-]+)", url, re.I)
+    return m.group(1) if m else ""
 
 def _canon(row: dict[str,object], key: str) -> str:
     low = {str(k).strip().lower(): "" if v is None else str(v).strip() for k,v in row.items()}
     for a in ALIASES[key]:
         if low.get(a): return low[a]
+    if key == "document_id":
+        return extract_document_id(low.get("link") or low.get("url") or "")
     return ""
+
 
 def _rows_from_path(path: Path) -> list[dict[str,object]]:
     if path.suffix.lower()==".csv":
