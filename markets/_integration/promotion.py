@@ -210,3 +210,81 @@ def promote_pdf_to_corpus(
 
     os.replace(part_ext, dest_ext)
     return "PROMOTED", "Successfully promoted to SOP corpus", dest_path
+
+
+def promote_pdf_bytes_to_corpus(
+    pdf_bytes: bytes,
+    output_root: Path,
+    staging_root: Path,
+    iso3: str,
+    mic: str,
+    ticker: str,
+    fiscal_year: int,
+    lei: str = "",
+    isin: str = "",
+    lang: str = "EN",
+    report_type: str = "AR",
+) -> Tuple[str, str, Path, str, int, int]:
+    """In-RAM zero-copy PyMuPDF validation and atomic write to target corpus.
+    Returns: (status, reason, final_path, sha256, page_count, size_bytes)
+    """
+    size_bytes = len(pdf_bytes)
+    if size_bytes == 0:
+        return "FAILED", "Zero-byte payload", Path(""), "", 0, 0
+
+    # 1. In-RAM structural validation
+    valid, pages, reason = validate_pdf_bytes_or_file(pdf_bytes)
+    if not valid:
+        return "INVALID_PDF", reason, Path(""), "", pages, size_bytes
+
+    sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+
+    # 2. Check identity completeness
+    valid_lei = is_valid_lei(lei)
+    valid_isin = is_valid_isin(isin)
+
+    if not (valid_lei and valid_isin):
+        clean_ticker = sanitize_token(ticker)
+        clean_report_type = report_type.strip().upper()
+        staged_rel = Path("unresolved_identity") / iso3 / mic / f"{clean_ticker}_FY{fiscal_year}" / f"{clean_ticker}_FY{fiscal_year}_{clean_report_type}_{lang}.pdf"
+        target_path = staging_root / staged_rel
+        target_ext = to_extended_path(target_path)
+        target_ext.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_ext, "wb") as f:
+            f.write(pdf_bytes)
+        missing_reasons = []
+        if not valid_lei: missing_reasons.append(f"LEI invalid or missing ('{lei}')")
+        if not valid_isin: missing_reasons.append(f"ISIN invalid or missing ('{isin}')")
+        return "STAGED_UNRESOLVED_IDENTITY", "; ".join(missing_reasons), target_path, sha256, pages, size_bytes
+
+    # 3. Canonical SOP path in Drive
+    sop_rel = build_sop_relative_path(iso3, mic, lei, isin, ticker, fiscal_year, lang=lang, report_type=report_type)
+    dest_path = output_root / sop_rel
+    dest_ext = to_extended_path(dest_path)
+    dest_ext.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest_ext.exists():
+        dest_hash, _ = compute_sha256_and_size(dest_ext)
+        if dest_hash == sha256:
+            return "IDEMPOTENT_EXISTING", "Identical hash already in corpus", dest_path, sha256, pages, size_bytes
+        else:
+            conflict_path = staging_root / "conflicts" / sop_rel
+            conflict_ext = to_extended_path(conflict_path)
+            conflict_ext.parent.mkdir(parents=True, exist_ok=True)
+            with open(conflict_ext, "wb") as f:
+                f.write(pdf_bytes)
+            return "CONFLICT", f"Conflicting file with differing SHA-256 ({sha256} vs {dest_hash})", conflict_path, sha256, pages, size_bytes
+
+    # 4. Atomic single-pass write to target: .part first, then atomic rename
+    part_path = dest_path.with_suffix(".pdf.part")
+    part_ext = to_extended_path(part_path)
+    with open(part_ext, "wb") as f:
+        f.write(pdf_bytes)
+
+    part_hash, _ = compute_sha256_and_size(part_ext)
+    if part_hash != sha256:
+        part_ext.unlink(missing_ok=True)
+        return "FAILED", "Integrity check failed during target transfer", dest_path, sha256, pages, size_bytes
+
+    os.replace(part_ext, dest_ext)
+    return "PROMOTED", "Successfully promoted to SOP corpus", dest_path, sha256, pages, size_bytes

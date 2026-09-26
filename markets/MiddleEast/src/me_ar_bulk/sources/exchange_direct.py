@@ -346,24 +346,6 @@ class DirectExchangeAdapter(BaseSourceAdapter):
         return candidates
 
     def _generate_canonical_filing_candidates(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
-        """Generate high-confidence candidate templates for the issuer's fiscal years."""
-        candidates = []
-        for y in range(start_year, end_year + 1):
-            cand_url = f"https://reports.me-exchange.org/{issuer.iso3}/{issuer.mic}/{issuer.ticker}/FY{y}/{issuer.ticker}_Annual_Report_{y}_EN.pdf"
-            candidates.append(Candidate(
-                candidate_id=f"{issuer.iso3}_{issuer.mic}_{issuer.ticker}_{y}_AR_FULL",
-                issuer_id=issuer.issuer_id,
-                source_name=f"{issuer.mic}_DISCLOSURE_PORTAL",
-                source_url=cand_url,
-                direct_url=cand_url,
-                title=f"{issuer.company_name} Annual Report {y} (English)",
-                publication_date=f"{y+1}-03-15",
-                period_end=f"{y}-12-31",
-                resolved_fy=y,
-                fy_confidence=0.95,
-                language="EN",
-                language_confidence=0.98,
-                document_class="AR_FULL",
-                class_confidence=0.95,
-            ))
-        return candidates
+        """Return empty list when direct exchange yields no matches; never generate fake domain links."""
+        return []
+

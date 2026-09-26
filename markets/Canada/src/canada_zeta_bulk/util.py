@@ -40,11 +40,20 @@ def norm_name(s: str | None) -> str:
     return re.sub(r"\s+", " ", x).strip()
 
 
+WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+}
+
 def safe_token(s: str | None, max_len: int = 80) -> str:
     s = norm_text(s)
     s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s)
     s = re.sub(r"\s+", "_", s).strip(" ._")
-    return (s or "UNKNOWN")[:max_len]
+    tok = (s or "UNKNOWN")[:max_len]
+    if tok.upper() in WIN_RESERVED:
+        tok = f"{tok}_"
+    return tok
 
 
 def sha256_file(path: Path) -> str:

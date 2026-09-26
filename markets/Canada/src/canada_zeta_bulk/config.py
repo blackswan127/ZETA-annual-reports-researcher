@@ -53,7 +53,7 @@ class Settings:
 
     @property
     def staging_dir(self) -> Path:
-        return self.work_dir / "staging"
+        return self.zeta_root / COUNTRY_ISO3
 
     @property
     def source_cache(self) -> Path:

@@ -1,9 +1,12 @@
+import io
 import pytest
 from pathlib import Path
 from pypdf import PdfWriter
 
 from markets._integration.contract import (
+    CohortManifest,
     CurrentIssuerRecord,
+    RequestedSlot,
     resolve_market_info,
 )
 from markets._integration.promotion import (
@@ -11,22 +14,31 @@ from markets._integration.promotion import (
     is_valid_isin,
     is_valid_lei,
     promote_pdf_to_corpus,
+    promote_pdf_bytes_to_corpus,
     validate_pdf_bytes_or_file,
 )
 from markets._integration.cohort import (
+    check_issuer_completed_in_corpus,
     deduplicate_india_roster,
     select_exact_cohort,
 )
 from markets._integration.coordinator import parse_plain_english_directive
 
 
-def create_dummy_pdf(path: Path, pages: int = 2) -> None:
+def create_dummy_pdf_bytes(pages: int = 2) -> bytes:
     w = PdfWriter()
     for _ in range(pages):
         w.add_blank_page(width=300, height=300)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def create_dummy_pdf(path: Path, pages: int = 2) -> None:
+    data = create_dummy_pdf_bytes(pages=pages)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
-        w.write(f)
+        f.write(data)
 
 
 def test_market_resolution():
@@ -58,6 +70,10 @@ def test_market_resolution():
         ("Jordan", "OMN", "XMUS"),
         ("SaudiArabia", "OMN", "XMUS"),
         ("DFM", "OMN", "XMUS"),
+        ("Philippines", "PHL", "XPHS"),
+        ("PHL", "PHL", "XPHS"),
+        ("XPHS", "PHL", "XPHS"),
+        ("PSE", "PHL", "XPHS"),
     ]
     for raw, exp_iso3, exp_mic in cases:
         info = resolve_market_info(raw)
@@ -292,4 +308,181 @@ def test_middle_east_exclusions():
 
     with pytest.raises(ValueError, match="excluded"):
         parse_plain_english_directive("download issuers in Israel")
+
+
+def test_dual_slots_cohort_generation():
+    issuers = [
+        CurrentIssuerRecord(issuer_id="BHP", legal_name="BHP Group", country_iso3="AUS", mic="XASX", ticker="BHP", isin="AU000000BHP4", lei="5493001KJTIIGC8Y1R12"),
+        CurrentIssuerRecord(issuer_id="CBA", legal_name="Commonwealth Bank", country_iso3="AUS", mic="XASX", ticker="CBA", isin="AU000000CBA7", lei="5493001KJTIIGC8Y1R99"),
+    ]
+    manifest = CohortManifest(
+        run_id="test_run",
+        market="Australia",
+        country_iso3="AUS",
+        mic="XASX",
+        requested_count=2,
+        selected_count=2,
+        fiscal_years=[2023, 2024],
+        report_types=["AR", "SR"],
+        issuers=issuers,
+    )
+    slots = manifest.generate_slots()
+    # 2 issuers * 2 years * 2 report_types = 8 slots
+    assert len(slots) == 8
+    slot_keys = [s.slot_key() for s in slots]
+    assert "BHP:FY2023:AR" in slot_keys
+    assert "BHP:FY2023:SR" in slot_keys
+    assert "BHP:FY2024:AR" in slot_keys
+    assert "BHP:FY2024:SR" in slot_keys
+    assert "CBA:FY2023:AR" in slot_keys
+    assert "CBA:FY2023:SR" in slot_keys
+    assert "CBA:FY2024:AR" in slot_keys
+    assert "CBA:FY2024:SR" in slot_keys
+
+
+def test_directive_parsing_dual_and_esg_types():
+    res1 = parse_plain_english_directive("harvest next 50 companies in MiddleEast for annual and sustainability reports FY2017-FY2025")
+    assert res1["market"] == "MiddleEast"
+    assert res1["count"] == 50
+    assert res1["fiscal_years"] == list(range(2017, 2026))
+    assert res1["report_types"] == ["AR", "SR"]
+
+    res2 = parse_plain_english_directive("extract ESG and climate disclosures for Australia 2024")
+    assert res2["market"] == "Australia"
+    assert res2["report_types"] == ["SR"]
+
+    res3 = parse_plain_english_directive("harvest 20 issuers in Hong Kong for AR and SR FY2023")
+    assert res3["market"] == "HongKong"
+    assert res3["count"] == 20
+    assert res3["fiscal_years"] == [2023]
+    assert res3["report_types"] == ["AR", "SR"]
+
+
+def test_in_ram_pdf_bytes_promotion(tmp_path):
+    pdf_bytes = create_dummy_pdf_bytes(pages=3)
+    corpus = tmp_path / "GLOBAL_SUSTAINABILITY_DATABASE"
+    staging = tmp_path / "staging"
+    lei = "5493001KJTIIGC8Y1R12"
+    isin = "AU000000BHP4"
+
+    status, reason, dest, sha, pages, sz = promote_pdf_bytes_to_corpus(
+        pdf_bytes=pdf_bytes,
+        output_root=corpus,
+        staging_root=staging,
+        iso3="AUS",
+        mic="XASX",
+        ticker="BHP",
+        fiscal_year=2024,
+        lei=lei,
+        isin=isin,
+        report_type="SR",
+    )
+    assert status == "PROMOTED"
+    assert dest.exists()
+    assert dest.name == f"{lei}_AUS_XASX_BHP_{isin}_FY2024_SR_EN.pdf"
+    assert pages == 3
+    assert len(sha) == 64
+    assert sz > 0
+
+    # Idempotent re-check
+    status2, _, dest2, _, _, _ = promote_pdf_bytes_to_corpus(
+        pdf_bytes=pdf_bytes,
+        output_root=corpus,
+        staging_root=staging,
+        iso3="AUS",
+        mic="XASX",
+        ticker="BHP",
+        fiscal_year=2024,
+        lei=lei,
+        isin=isin,
+        report_type="SR",
+    )
+    assert status2 == "IDEMPOTENT_EXISTING"
+
+    # Missing identity routes to staging
+    status3, reason3, dest3, _, _, _ = promote_pdf_bytes_to_corpus(
+        pdf_bytes=pdf_bytes,
+        output_root=corpus,
+        staging_root=staging,
+        iso3="AUS",
+        mic="XASX",
+        ticker="BHP",
+        fiscal_year=2024,
+        lei="",
+        isin="",
+        report_type="SR",
+    )
+    assert status3 == "STAGED_UNRESOLVED_IDENTITY"
+    assert dest3.exists()
+    assert staging in dest3.parents
+
+
+def test_integrated_report_dual_fulfillment(tmp_path):
+    corpus = tmp_path / "GLOBAL_SUSTAINABILITY_DATABASE"
+    staging = tmp_path / "staging"
+    issuer = CurrentIssuerRecord(
+        issuer_id="BHP",
+        legal_name="BHP Group",
+        country_iso3="AUS",
+        mic="XASX",
+        ticker="BHP",
+        isin="AU000000BHP4",
+        lei="5493001KJTIIGC8Y1R12",
+    )
+    # Neither AR nor SR exists
+    assert check_issuer_completed_in_corpus(issuer, [2024], corpus, report_types=["AR", "SR"]) is False
+
+    # Promote an Integrated Report (IR)
+    pdf_bytes = create_dummy_pdf_bytes(pages=2)
+    promote_pdf_bytes_to_corpus(
+        pdf_bytes=pdf_bytes,
+        output_root=corpus,
+        staging_root=staging,
+        iso3="AUS",
+        mic="XASX",
+        ticker="BHP",
+        fiscal_year=2024,
+        lei=issuer.lei,
+        isin=issuer.isin,
+        report_type="IR",
+    )
+    # IR fulfills both AR and SR slots!
+    assert check_issuer_completed_in_corpus(issuer, [2024], corpus, report_types=["AR", "SR"]) is True
+
+
+def test_speed_engine_sitemap_and_matrix_probe():
+    from markets._integration.speed_engine import SpeedEngine, REPORT_URL_PATTERN
+    engine = SpeedEngine()
+    # Test regex patterns
+    assert REPORT_URL_PATTERN.search("https://example.com/assets/annual-report-2023.pdf") is not None
+    assert REPORT_URL_PATTERN.search("https://example.com/files/sustainability_report_2024.pdf") is not None
+    assert REPORT_URL_PATTERN.search("https://example.com/esg_databook_2022.pdf") is not None
+    assert REPORT_URL_PATTERN.search("https://example.com/invoice_2023.pdf") is None
+
+
+def test_philippines_integration():
+    from markets._integration.adapters import PhilippinesAdapter, get_market_adapter
+    res = parse_plain_english_directive("download next 25 issuers for Philippines 2017-2025 annual reports and sustainability")
+    assert res["market"] == "Philippines"
+    assert res["count"] == 25
+    assert res["fiscal_years"] == list(range(2017, 2026))
+    assert res["report_types"] == ["AR", "SR"]
+
+    adapter = get_market_adapter("Philippines")
+    assert isinstance(adapter, PhilippinesAdapter)
+    assert adapter.market_name == "Philippines"
+    assert adapter.info["iso3"] == "PHL"
+    assert adapter.info["mic"] == "XPHS"
+
+
+def test_palestine_exclusion():
+    with pytest.raises(ValueError):
+        parse_plain_english_directive("harvest palestine reports")
+
+    with pytest.raises(ValueError):
+        resolve_market_info("Palestine")
+
+    with pytest.raises(ValueError):
+        resolve_market_info("XPSX")
+
 

@@ -40,6 +40,7 @@ def ensure_sys_paths():
         str(ROOT_DIR / "markets" / "SriLanka" / "src"),
         str(ROOT_DIR / "markets" / "Africa" / "src"),
         str(ROOT_DIR / "markets" / "MiddleEast" / "src"),
+        str(ROOT_DIR / "markets" / "Philippines" / "src"),
     ]
     for p in paths:
         if p not in sys.path:
@@ -175,6 +176,8 @@ class AustraliaAdapter(BaseMarketAdapter):
             pass
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
                 company_pattern = f"{issuer.ticker}_*"
@@ -187,23 +190,26 @@ class AustraliaAdapter(BaseMarketAdapter):
                         for f in fy_dir.glob(f"{issuer.ticker}*/**/{fy}/*.pdf"):
                             matched_pdfs.append(f)
 
-                if matched_pdfs:
-                    for matched_pdf in matched_pdfs:
-                        fname_lower = matched_pdf.name.lower()
-                        if "annual" in fname_lower:
-                            rep_type = "AR"
-                        elif "sustain" in fname_lower or "sr" in fname_lower:
-                            rep_type = "SR"
-                        elif "esg" in fname_lower:
-                            rep_type = "ESG"
-                        elif "climate" in fname_lower:
-                            rep_type = "CLIMATE"
-                        else:
-                            rep_type = "AR"
+                matched_by_type: dict[str, Path] = {}
+                for matched_pdf in matched_pdfs:
+                    fname_lower = matched_pdf.name.lower()
+                    if "integrated" in fname_lower:
+                        rep_type = "IR"
+                    elif any(w in fname_lower for w in ["sustain", "sr", "esg", "climate"]):
+                        rep_type = "SR"
+                    else:
+                        rep_type = "AR"
+                    if rep_type not in matched_by_type:
+                        matched_by_type[rep_type] = matched_pdf
 
-                        slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rep_type}"
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        actual_type = "IR" if "IR" in matched_by_type and target_pdf == matched_by_type["IR"] else rtype
                         status, reason, final_path = promote_pdf_to_corpus(
-                            source_pdf=matched_pdf,
+                            source_pdf=target_pdf,
                             output_root=output_corpus,
                             staging_root=self.staging_dir,
                             iso3=issuer.country_iso3,
@@ -212,15 +218,16 @@ class AustraliaAdapter(BaseMarketAdapter):
                             fiscal_year=fy,
                             lei=issuer.lei,
                             isin=issuer.isin,
-                            report_type=rep_type,
+                            report_type=actual_type,
                         )
-                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
-                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
+                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else target_pdf)
                         results.append(SlotResult(
                             slot_id=slot_id,
                             run_id=cohort.run_id,
                             issuer_id=issuer.issuer_id,
                             fiscal_year=fy,
+                            report_type=rtype,
                             status=status,
                             reason=reason,
                             sha256=h,
@@ -229,17 +236,17 @@ class AustraliaAdapter(BaseMarketAdapter):
                             destination_path=str(final_path),
                             elapsed_seconds=round(time.time() - t0, 2),
                         ))
-                else:
-                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:AR"
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -336,54 +343,73 @@ class IndiaAdapter(BaseMarketAdapter):
             pipe.close()
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
                 key = issuer.isin or issuer.ticker or issuer.issuer_id
                 fy_dir = work_dir / "pdfs"
+                matched_pdfs = []
                 if fy_dir.exists():
-                    for f in fy_dir.glob(f"*{key}*/**/{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
+                    matched_pdfs = list(fy_dir.glob(f"*{key}*/**/{fy}/*.pdf"))
 
-                if matched_pdf and matched_pdf.exists():
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=matched_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3=issuer.country_iso3,
-                        mic=issuer.mic,
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                    )
-                    h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                else:
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                matched_by_type: dict[str, Path] = {}
+                for matched_pdf in matched_pdfs:
+                    fname_lower = matched_pdf.name.lower()
+                    if "integrated" in fname_lower:
+                        rep_type = "IR"
+                    elif any(w in fname_lower for w in ["brsr", "sustain", "sr", "esg", "climate"]):
+                        rep_type = "SR"
+                    else:
+                        rep_type = "AR"
+                    if rep_type not in matched_by_type:
+                        matched_by_type[rep_type] = matched_pdf
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        actual_type = "IR" if "IR" in matched_by_type and target_pdf == matched_by_type["IR"] else rtype
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=target_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            report_type=actual_type,
+                        )
+                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else target_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -443,52 +469,70 @@ class HongKongAdapter(BaseMarketAdapter):
             await download_selected(db, client, output=work_dir, workers=8, stock_codes=codes)
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
                 code = issuer.ticker.zfill(5)
-                for f in work_dir.glob(f"pdf/*{code}*/**/{fy}/*.pdf"):
-                    matched_pdf = f
-                    break
+                matched_pdfs = list(work_dir.glob(f"pdf/*{code}*/**/{fy}/*.pdf"))
 
-                if matched_pdf and matched_pdf.exists():
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=matched_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3=issuer.country_iso3,
-                        mic=issuer.mic,
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                    )
-                    h, sz = compute_sha256_and_size(final_path if final_path.exists() else matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                else:
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                matched_by_type: dict[str, Path] = {}
+                for matched_pdf in matched_pdfs:
+                    fname_lower = matched_pdf.name.lower()
+                    if "integrated" in fname_lower:
+                        rep_type = "IR"
+                    elif any(w in fname_lower for w in ["esg", "sustain", "sr", "climate", "environmental"]):
+                        rep_type = "SR"
+                    else:
+                        rep_type = "AR"
+                    if rep_type not in matched_by_type:
+                        matched_by_type[rep_type] = matched_pdf
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        actual_type = "IR" if "IR" in matched_by_type and target_pdf == matched_by_type["IR"] else rtype
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=target_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            report_type=actual_type,
+                        )
+                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else target_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -554,6 +598,8 @@ class SingaporeAdapter(BaseMarketAdapter):
 
         results: List[SlotResult] = []
         conn = pipe.db.conn
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
                 downloaded_rows = conn.execute(
@@ -563,50 +609,63 @@ class SingaporeAdapter(BaseMarketAdapter):
                     (issuer.issuer_id, fy),
                 ).fetchall()
 
-                if downloaded_rows:
-                    for row in downloaded_rows:
-                        local_p = Path(row[0]) if row[0] else None
-                        rtype = row[1] if row[1] else "AR"
-                        slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
-                        if local_p and local_p.exists():
-                            status, reason, final_path = promote_pdf_to_corpus(
-                                source_pdf=local_p,
-                                output_root=output_corpus,
-                                staging_root=self.staging_dir,
-                                iso3=issuer.country_iso3,
-                                mic=issuer.mic,
-                                ticker=issuer.ticker,
-                                fiscal_year=fy,
-                                lei=issuer.lei,
-                                isin=issuer.isin,
-                                report_type=rtype,
-                            )
-                            h, sz = compute_sha256_and_size(final_path if final_path.exists() else local_p)
-                            _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else local_p)
-                            results.append(SlotResult(
-                                slot_id=slot_id,
-                                run_id=cohort.run_id,
-                                issuer_id=issuer.issuer_id,
-                                fiscal_year=fy,
-                                status=status,
-                                reason=reason,
-                                sha256=h,
-                                page_count=pages,
-                                file_size_bytes=sz,
-                                destination_path=str(final_path),
-                                elapsed_seconds=round(time.time() - t0, 2),
-                            ))
-                else:
-                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:AR"
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                found_by_type: dict[str, tuple[Path, str]] = {}
+                for row in downloaded_rows:
+                    local_p = Path(row[0]) if row[0] else None
+                    rtype = row[1] if row[1] else "AR"
+                    title = (row[2] or "").lower()
+                    if "integrated" in title:
+                        found_by_type["IR"] = (local_p, row[2])
+                    elif any(w in title for w in ["sustain", "esg", "climate"]) or rtype == "SR":
+                        found_by_type["SR"] = (local_p, row[2])
+                    else:
+                        found_by_type["AR"] = (local_p, row[2])
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    item = found_by_type.get(rtype) or found_by_type.get("IR")
+                    if item and item[0] and item[0].exists():
+                        local_p = item[0]
+                        actual_type = "IR" if "IR" in found_by_type and item == found_by_type["IR"] else rtype
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=local_p,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            report_type=actual_type,
+                        )
+                        h, sz = compute_sha256_and_size(final_path if final_path.exists() else local_p)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path if final_path.exists() else local_p)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -686,45 +745,56 @@ class CanadaAdapter(BaseMarketAdapter):
             pipe.close()
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
-                # Check directly in output corpus or staging
-                for f in output_corpus.glob(f"CAN/**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                    matched_pdf = f
-                    break
-                if not matched_pdf:
-                    for f in self.staging_dir.glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
+                found_pdfs = list(output_corpus.glob(f"CAN/**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
+                if not found_pdfs:
+                    found_pdfs = list(self.staging_dir.glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
 
-                if matched_pdf and matched_pdf.exists():
-                    h, sz = compute_sha256_and_size(matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="PROMOTED" if output_corpus in matched_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
-                        reason="Validated",
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(matched_pdf),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                else:
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                matched_by_type: dict[str, Path] = {}
+                for f in found_pdfs:
+                    fname = f.name.lower()
+                    if "integrated" in fname or "_ir_" in fname:
+                        matched_by_type["IR"] = f
+                    elif any(w in fname for w in ["sustain", "esg", "sr", "_sr_"]):
+                        matched_by_type["SR"] = f
+                    else:
+                        matched_by_type["AR"] = f
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        h, sz = compute_sha256_and_size(target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(target_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="PROMOTED" if output_corpus in target_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
+                            reason="Validated",
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(target_pdf),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -795,44 +865,56 @@ class BangladeshAdapter(BaseMarketAdapter):
             pipe.close()
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
-                for f in output_corpus.glob(f"BGD/**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                    matched_pdf = f
-                    break
-                if not matched_pdf:
-                    for f in (work_dir / "staging").glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
+                found_pdfs = list(output_corpus.glob(f"BGD/**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
+                if not found_pdfs:
+                    found_pdfs = list((work_dir / "staging").glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
 
-                if matched_pdf and matched_pdf.exists():
-                    h, sz = compute_sha256_and_size(matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="PROMOTED" if output_corpus in matched_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
-                        reason="Validated",
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(matched_pdf),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                else:
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                matched_by_type: dict[str, Path] = {}
+                for f in found_pdfs:
+                    fname = f.name.lower()
+                    if "integrated" in fname or "_ir_" in fname:
+                        matched_by_type["IR"] = f
+                    elif any(w in fname for w in ["sustain", "esg", "sr", "_sr_"]):
+                        matched_by_type["SR"] = f
+                    else:
+                        matched_by_type["AR"] = f
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        h, sz = compute_sha256_and_size(target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(target_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="PROMOTED" if output_corpus in target_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
+                            reason="Validated",
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(target_pdf),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -903,44 +985,56 @@ class NewZealandAdapter(BaseMarketAdapter):
             pipe.close()
 
         results: List[SlotResult] = []
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
         for issuer in cohort.issuers:
             for fy in cohort.fiscal_years:
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}"
-                matched_pdf = None
-                for f in output_corpus.glob(f"NZL/**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                    matched_pdf = f
-                    break
-                if not matched_pdf:
-                    for f in (work_dir / "staging").glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"):
-                        matched_pdf = f
-                        break
+                found_pdfs = list(output_corpus.glob(f"NZL/**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
+                if not found_pdfs:
+                    found_pdfs = list((work_dir / "staging").glob(f"**/{issuer.ticker}*/**/FY{fy}/*.pdf"))
 
-                if matched_pdf and matched_pdf.exists():
-                    h, sz = compute_sha256_and_size(matched_pdf)
-                    _, pages, _ = validate_pdf_bytes_or_file(matched_pdf)
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="PROMOTED" if output_corpus in matched_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
-                        reason="Validated",
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(matched_pdf),
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                else:
-                    results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found or download incomplete",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                matched_by_type: dict[str, Path] = {}
+                for f in found_pdfs:
+                    fname = f.name.lower()
+                    if "integrated" in fname or "_ir_" in fname:
+                        matched_by_type["IR"] = f
+                    elif any(w in fname for w in ["sustain", "esg", "sr", "climate", "_sr_"]):
+                        matched_by_type["SR"] = f
+                    else:
+                        matched_by_type["AR"] = f
+
+                for rtype in target_types:
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    target_pdf = matched_by_type.get(rtype) or matched_by_type.get("IR")
+
+                    if target_pdf and target_pdf.exists():
+                        h, sz = compute_sha256_and_size(target_pdf)
+                        _, pages, _ = validate_pdf_bytes_or_file(target_pdf)
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="PROMOTED" if output_corpus in target_pdf.parents else "STAGED_UNRESOLVED_IDENTITY",
+                            reason="Validated",
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(target_pdf),
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    else:
+                        results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason="No candidate filing found or download incomplete",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
         return results
 
 
@@ -1103,76 +1197,88 @@ class SriLankaAdapter(BaseMarketAdapter):
                 except Exception:
                     candidates = []
 
+            target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
             # Group candidates by (fy, report_type)
-            by_fy: dict[int, Any] = {}
+            by_fy_and_type: dict[tuple[int, str], Any] = {}
             for cand in candidates:
-                rtype = getattr(cand, "report_type", "AR")
-                key = cand.fy
-                if key and (key not in by_fy or cand.fy_confidence > by_fy[key].fy_confidence):
-                    by_fy[key] = cand
+                title_lower = (cand.title or "").lower()
+                if "integrated" in title_lower:
+                    c_type = "IR"
+                elif any(w in title_lower for w in ["sustain", "esg", "climate"]):
+                    c_type = "SR"
+                else:
+                    c_type = getattr(cand, "report_type", "AR")
+                key = (cand.fy, c_type)
+                if key not in by_fy_and_type or cand.fy_confidence > by_fy_and_type[key].fy_confidence:
+                    by_fy_and_type[key] = cand
 
             issuer_results = []
             for fy in cohort.fiscal_years:
-                cand = by_fy.get(fy)
-                rtype = getattr(cand, "report_type", "AR") if cand else "AR"
-                slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
-                if not cand:
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason="No candidate filing found in CSE infoAnnualData",
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                    continue
+                for rtype in target_types:
+                    cand = by_fy_and_type.get((fy, rtype)) or by_fy_and_type.get((fy, "IR"))
+                    slot_id = f"{cohort.run_id}:{issuer.ticker}:FY{fy}:{rtype}"
+                    if not cand:
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason=f"No candidate filing found for {issuer.ticker} FY{fy} {rtype}",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                        continue
 
-                temp_pdf = staging_dir / f"{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
-                try:
-                    download_meta = await downloader.get(cand.source_url, temp_pdf)
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=temp_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3="LKA",
-                        mic="XCOL",
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                        lang="EN",
-                        report_type=rtype,
-                    )
-                    temp_pdf.unlink(missing_ok=True)
-                    h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        source_url=cand.source_url,
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                except Exception as e:
-                    temp_pdf.unlink(missing_ok=True)
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="FAILED",
-                        reason=f"Download/validation error: {str(e)}",
-                        source_url=cand.source_url,
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                    temp_pdf = staging_dir / f"{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
+                    try:
+                        download_meta = await downloader.get(cand.source_url, temp_pdf)
+                        rep_tag = "IR" if ("integrated" in (cand.title or "").lower() or getattr(cand, "report_type", "") == "IR") else rtype
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=temp_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3="LKA",
+                            mic="XCOL",
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            lang="EN",
+                            report_type=rep_tag,
+                        )
+                        temp_pdf.unlink(missing_ok=True)
+                        h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            source_url=cand.source_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    except Exception as e:
+                        temp_pdf.unlink(missing_ok=True)
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="FAILED",
+                            reason=f"Download/validation error: {str(e)}",
+                            source_url=cand.source_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
             return issuer_results
 
         try:
@@ -1256,16 +1362,20 @@ class AfricaAdapter(BaseMarketAdapter):
             by_fy_and_type: dict[tuple[int, str], Any] = {}
             for cand in candidates:
                 if cand.resolved_fy:
-                    key = (cand.resolved_fy, cand.classification)
+                    classification = cand.classification
+                    title_lower = (cand.title or "").lower()
+                    if "integrated" in title_lower:
+                        classification = "IR"
+                    key = (cand.resolved_fy, classification)
                     if key not in by_fy_and_type or cand.fy_confidence > by_fy_and_type[key].fy_confidence:
                         by_fy_and_type[key] = cand
 
-            target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR"]
+            target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
 
             issuer_results = []
             for fy in cohort.fiscal_years:
                 for rtype in target_types:
-                    cand = by_fy_and_type.get((fy, rtype))
+                    cand = by_fy_and_type.get((fy, rtype)) or by_fy_and_type.get((fy, "IR"))
                     slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
                     if not cand or not cand.direct_pdf_url:
                         issuer_results.append(SlotResult(
@@ -1273,6 +1383,7 @@ class AfricaAdapter(BaseMarketAdapter):
                             run_id=cohort.run_id,
                             issuer_id=issuer.issuer_id,
                             fiscal_year=fy,
+                            report_type=rtype,
                             status="UNRESOLVED",
                             reason=f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy} {rtype}",
                             elapsed_seconds=round(time.time() - t0, 2),
@@ -1282,6 +1393,7 @@ class AfricaAdapter(BaseMarketAdapter):
                     temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
                     try:
                         _ = await downloader.get(cand.direct_pdf_url, temp_pdf)
+                        rep_tag = "IR" if ("integrated" in (cand.title or "").lower() or getattr(cand, "classification", "") == "IR") else rtype
                         status, reason, final_path = promote_pdf_to_corpus(
                             source_pdf=temp_pdf,
                             output_root=output_corpus,
@@ -1293,7 +1405,7 @@ class AfricaAdapter(BaseMarketAdapter):
                             lei=issuer.lei,
                             isin=issuer.isin,
                             lang="EN",
-                            report_type=rtype,
+                            report_type=rep_tag,
                         )
                         temp_pdf.unlink(missing_ok=True)
                         h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
@@ -1303,6 +1415,7 @@ class AfricaAdapter(BaseMarketAdapter):
                             run_id=cohort.run_id,
                             issuer_id=issuer.issuer_id,
                             fiscal_year=fy,
+                            report_type=rtype,
                             status=status,
                             reason=reason,
                             sha256=h,
@@ -1319,6 +1432,7 @@ class AfricaAdapter(BaseMarketAdapter):
                             run_id=cohort.run_id,
                             issuer_id=issuer.issuer_id,
                             fiscal_year=fy,
+                            report_type=rtype,
                             status="FAILED",
                             reason=f"Download/validation error: {str(e)}",
                             source_url=cand.direct_pdf_url,
@@ -1374,7 +1488,7 @@ class MiddleEastAdapter(BaseMarketAdapter):
 
         results: List[SlotResult] = []
         direct_adapter = DirectExchangeAdapter()
-        downloader = Downloader(workers=8, rps=4.0)
+        downloader = Downloader(workers=16, rps=8.0, timeout=15.0, retries=2)
         staging_dir = self.staging_dir
         staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1392,89 +1506,108 @@ class MiddleEastAdapter(BaseMarketAdapter):
             min_fy = min(cohort.fiscal_years)
             max_fy = max(cohort.fiscal_years)
             try:
-                candidates = await direct_adapter.discover_candidates(me_iss, min_fy, max_fy)
+                candidates = await asyncio.wait_for(
+                    direct_adapter.discover_candidates(me_iss, min_fy, max_fy),
+                    timeout=20.0,
+                )
             except Exception:
                 candidates = []
 
-            # Prioritize AR_FULL candidates
-            by_fy: dict[int, Any] = {}
+            # Prioritize candidates by fiscal year and report type
+            target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR", "SR"]
+
+            by_fy_and_type: dict[tuple[int, str], Any] = {}
             for cand in candidates:
                 if cand.resolved_fy:
-                    is_full = (cand.document_class == "AR_FULL")
-                    curr = by_fy.get(cand.resolved_fy)
-                    if not curr:
-                        by_fy[cand.resolved_fy] = cand
-                    elif not (curr.document_class == "AR_FULL") and is_full:
-                        by_fy[cand.resolved_fy] = cand
-                    elif curr.document_class == cand.document_class and cand.fy_confidence > curr.fy_confidence:
-                        by_fy[cand.resolved_fy] = cand
+                    title_lower = (cand.title or "").lower()
+                    if "integrated" in title_lower:
+                        c_type = "IR"
+                    elif cand.document_class == "AR_FULL":
+                        c_type = "AR"
+                    elif cand.document_class == "ESG_COMPONENT" or "sustain" in title_lower or "esg" in title_lower:
+                        c_type = "SR"
+                    else:
+                        c_type = "AR"
+
+                    key = (cand.resolved_fy, c_type)
+                    curr = by_fy_and_type.get(key)
+                    if not curr or cand.fy_confidence > curr.fy_confidence:
+                        by_fy_and_type[key] = cand
 
             issuer_results = []
             for fy in cohort.fiscal_years:
-                cand = by_fy.get(fy)
-                rtype = "AR"
-                slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
+                for rtype in target_types:
+                    cand = by_fy_and_type.get((fy, rtype))
+                    # An Integrated Report (IR) satisfies both AR and SR slots
+                    if not cand:
+                        cand = by_fy_and_type.get((fy, "IR"))
 
-                # Invariant: Only AR_FULL satisfies final ZETA slot
-                if not cand or cand.document_class != "AR_FULL" or not (cand.direct_url or cand.source_url):
-                    reason = "No AR_FULL candidate filing found (components cannot satisfy AR slot)" if cand else f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy}"
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="UNRESOLVED",
-                        reason=reason,
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                    continue
+                    slot_id = f"{cohort.run_id}:{issuer.country_iso3}:{issuer.mic}:{issuer.ticker}:FY{fy}:{rtype}"
 
-                url = cand.direct_url or cand.source_url
-                temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
-                try:
-                    _ = await downloader.get(url, temp_pdf)
-                    status, reason, final_path = promote_pdf_to_corpus(
-                        source_pdf=temp_pdf,
-                        output_root=output_corpus,
-                        staging_root=self.staging_dir,
-                        iso3=issuer.country_iso3,
-                        mic=issuer.mic,
-                        ticker=issuer.ticker,
-                        fiscal_year=fy,
-                        lei=issuer.lei,
-                        isin=issuer.isin,
-                        lang="EN",
-                        report_type=rtype,
-                    )
-                    temp_pdf.unlink(missing_ok=True)
-                    h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
-                    _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status=status,
-                        reason=reason,
-                        sha256=h,
-                        page_count=pages,
-                        file_size_bytes=sz,
-                        destination_path=str(final_path),
-                        source_url=url,
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
-                except Exception as e:
-                    temp_pdf.unlink(missing_ok=True)
-                    issuer_results.append(SlotResult(
-                        slot_id=slot_id,
-                        run_id=cohort.run_id,
-                        issuer_id=issuer.issuer_id,
-                        fiscal_year=fy,
-                        status="FAILED",
-                        reason=f"Download/validation error: {str(e)}",
-                        source_url=url,
-                        elapsed_seconds=round(time.time() - t0, 2),
-                    ))
+                    # Invariant: AR requires AR_FULL or IR; SR requires ESG_COMPONENT, IR, or sustainability classification
+                    if not cand or not (cand.direct_url or cand.source_url) or (rtype == "AR" and cand.document_class not in ("AR_FULL", "IR") and "integrated" not in (cand.title or "").lower()):
+                        reason = "No AR_FULL candidate filing found (components cannot satisfy AR slot)" if (cand and rtype == "AR" and cand.document_class not in ("AR_FULL", "IR")) else f"No candidate filing found for {issuer.country_iso3}:{issuer.ticker} FY{fy} {rtype}"
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason=reason,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                        continue
+
+                    url = cand.direct_url or cand.source_url
+                    temp_pdf = staging_dir / f"{issuer.country_iso3}_{issuer.ticker}_FY{fy}_{rtype}_temp.pdf"
+                    try:
+                        _ = await downloader.get(url, temp_pdf)
+                        rep_tag = "IR" if ("integrated" in (cand.title or "").lower() or getattr(cand, "document_class", "") == "IR") else rtype
+                        status, reason, final_path = promote_pdf_to_corpus(
+                            source_pdf=temp_pdf,
+                            output_root=output_corpus,
+                            staging_root=self.staging_dir,
+                            iso3=issuer.country_iso3,
+                            mic=issuer.mic,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            lang="EN",
+                            report_type=rep_tag,
+                        )
+                        temp_pdf.unlink(missing_ok=True)
+                        h, sz = compute_sha256_and_size(final_path) if final_path.exists() else ("", 0)
+                        _, pages, _ = validate_pdf_bytes_or_file(final_path) if final_path.exists() else (False, 0, "")
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path),
+                            source_url=url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    except Exception as e:
+                        temp_pdf.unlink(missing_ok=True)
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="FAILED",
+                            reason=f"Download/validation error: {str(e)}",
+                            source_url=url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
             return issuer_results
 
         try:
@@ -1484,6 +1617,161 @@ class MiddleEastAdapter(BaseMarketAdapter):
         finally:
             await direct_adapter.close()
             await downloader.close()
+
+        return results
+
+
+class PhilippinesAdapter(BaseMarketAdapter):
+    def __init__(self):
+        super().__init__("Philippines")
+
+    async def load_roster(self, refresh: bool = False) -> List[CurrentIssuerRecord]:
+        ensure_sys_paths()
+        from phl_pse_bulk.config import Settings
+        from phl_pse_bulk.universe import UniverseManager
+
+        os.environ["PSE_TERMS_ACKNOWLEDGED"] = "1"
+        settings = Settings(local_dir=self.local_dir)
+        mgr = UniverseManager(settings)
+        issuers = await mgr.fetch_universe(refresh=refresh)
+
+        as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        roster: List[CurrentIssuerRecord] = []
+        for i in issuers:
+            roster.append(CurrentIssuerRecord(
+                issuer_id=i.ticker,
+                legal_name=i.company_name,
+                country_iso3="PHL",
+                mic="XPHS",
+                ticker=i.ticker,
+                isin=i.isin or "",
+                lei=i.lei or "",
+                instrument_type="Equity",
+                active_status="ACTIVE" if i.active else "SUSPENDED",
+                as_of_date=as_of,
+                source_url=f"https://edge.pse.com.ph/companyPage/stockData.do?cmpy_id={i.pse_company_id}",
+            ))
+        return roster
+
+    async def harvest_cohort(
+        self,
+        cohort: CohortManifest,
+        output_corpus: Path,
+    ) -> List[SlotResult]:
+        ensure_sys_paths()
+        from phl_pse_bulk.config import Settings
+        from phl_pse_bulk.client import PSEClient
+        from phl_pse_bulk.discovery import DiscoveryEngine
+        from phl_pse_bulk.downloader import Downloader
+
+        os.environ["PSE_TERMS_ACKNOWLEDGED"] = "1"
+        settings = Settings(
+            output_root=output_corpus,
+            local_dir=self.local_dir,
+            acknowledge_terms=True,
+        )
+        client = PSEClient(settings)
+        discovery = DiscoveryEngine(client)
+        downloader = Downloader(client, settings)
+
+        target_types = getattr(cohort, "report_types", ["AR", "SR"]) if hasattr(cohort, "report_types") and cohort.report_types else ["AR"]
+        min_fy = min(cohort.fiscal_years) if cohort.fiscal_years else 2017
+        max_fy = max(cohort.fiscal_years) if cohort.fiscal_years else 2025
+
+        results: List[SlotResult] = []
+
+        async def process_issuer(issuer: CurrentIssuerRecord) -> List[SlotResult]:
+            t0 = time.time()
+            issuer_results: List[SlotResult] = []
+            try:
+                filings = await discovery.discover_issuer_filings(
+                    cmpy_id=issuer.issuer_id,
+                    ticker=issuer.ticker,
+                    from_date=f"{min_fy}-01-01",
+                    to_date="2026-06-30",
+                )
+            except Exception:
+                filings = []
+
+            # Group candidates by (fy, type)
+            candidates_by_fy_and_type: Dict[tuple[int, str], Any] = {}
+            for filing in filings:
+                fy = filing.fiscal_year
+                if not fy or fy not in cohort.fiscal_years:
+                    continue
+                for att in filing.attachments:
+                    if att.classification == "AR_FULL":
+                        k = (fy, "AR")
+                        if k not in candidates_by_fy_and_type:
+                            candidates_by_fy_and_type[k] = att
+                    elif att.classification == "SR":
+                        k = (fy, "SR")
+                        if k not in candidates_by_fy_and_type:
+                            candidates_by_fy_and_type[k] = att
+
+            for fy in cohort.fiscal_years:
+                for rtype in target_types:
+                    att = candidates_by_fy_and_type.get((fy, rtype))
+                    slot_id = f"{cohort.run_id}:PHL:XPHS:{issuer.ticker}:FY{fy}:{rtype}"
+
+                    if not att or not att.download_url:
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="UNRESOLVED",
+                            reason=f"No matching {rtype} filing found on PSE EDGE",
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                        continue
+
+                    try:
+                        status, reason, final_path, h, pages, sz = await downloader.download_and_promote(
+                            download_url=att.download_url,
+                            ticker=issuer.ticker,
+                            fiscal_year=fy,
+                            lei=issuer.lei,
+                            isin=issuer.isin,
+                            report_type=rtype,
+                            output_root=output_corpus,
+                        )
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status=status,
+                            reason=reason,
+                            sha256=h,
+                            page_count=pages,
+                            file_size_bytes=sz,
+                            destination_path=str(final_path) if final_path else None,
+                            source_url=att.download_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+                    except Exception as e:
+                        issuer_results.append(SlotResult(
+                            slot_id=slot_id,
+                            run_id=cohort.run_id,
+                            issuer_id=issuer.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rtype,
+                            status="FAILED",
+                            reason=f"Download/validation error: {str(e)}",
+                            source_url=att.download_url,
+                            elapsed_seconds=round(time.time() - t0, 2),
+                        ))
+            return issuer_results
+
+        try:
+            batch_results = await asyncio.gather(*(process_issuer(iss) for iss in cohort.issuers))
+            for res_list in batch_results:
+                results.extend(res_list)
+        finally:
+            await client.close()
 
         return results
 
@@ -1501,6 +1789,7 @@ def get_market_adapter(market_name: str) -> BaseMarketAdapter:
         "SriLanka": SriLankaAdapter,
         "Africa": AfricaAdapter,
         "MiddleEast": MiddleEastAdapter,
+        "Philippines": PhilippinesAdapter,
     }
     if norm not in adapters:
         raise ValueError(f"No adapter available for market '{market_name}'")

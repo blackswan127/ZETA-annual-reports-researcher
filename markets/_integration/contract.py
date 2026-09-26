@@ -36,9 +36,14 @@ MARKET_DEFAULTS = {
             "TADAWUL", "QATAR", "QSE", "BAHRAIN", "KUWAIT", "BOURSAKUWAIT",
         ],
     },
+    "Philippines": {
+        "iso3": "PHL",
+        "mic": "XPHS",
+        "aliases": ["PHILIPPINES", "PHL", "XPHS", "PSE", "PSE_EDGE", "MANILA", "FILIPINO"],
+    },
 }
 
-EXCLUDED_MARKETS = {"PALESTINE", "PSE", "PEX", "XPSX", "ISRAEL", "ISR", "TASE", "XTAE"}
+EXCLUDED_MARKETS = {"PALESTINE", "PALESTINE_PSE", "PEX", "XPSX", "ISRAEL", "ISR", "TASE", "XTAE"}
 
 
 def resolve_market_info(market_name: str) -> Dict[str, Any]:
@@ -123,6 +128,7 @@ class CandidateFiling:
     filing_title: str
     source_type: str
     source_url: str
+    report_type: str = "AR"
     confidence_score: float = 1.0
     is_split_part: bool = False
     part_number: int = 1
@@ -152,7 +158,8 @@ class SlotResult:
     run_id: str
     issuer_id: str
     fiscal_year: int
-    status: str  # PROMOTED, VERIFIED, STAGED_UNRESOLVED_IDENTITY, FAILED, UNRESOLVED, CONFLICT
+    report_type: str = "AR"
+    status: str = "UNRESOLVED"  # PROMOTED, VERIFIED, STAGED_UNRESOLVED_IDENTITY, FAILED, UNRESOLVED, CONFLICT
     reason: str = ""
     sha256: str = ""
     page_count: int = 0
@@ -180,8 +187,31 @@ class CohortManifest:
     requested_count: int
     selected_count: int
     fiscal_years: List[int]
+    report_types: List[str] = field(default_factory=lambda: ["AR", "SR"])
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     issuers: List[CurrentIssuerRecord] = field(default_factory=list)
+
+    def generate_slots(self) -> List[RequestedSlot]:
+        """Generate all expected filing slots across all issuers, fiscal years, and report types."""
+        slots: List[RequestedSlot] = []
+        for iss in self.issuers:
+            for fy in self.fiscal_years:
+                for rt in self.report_types:
+                    slots.append(
+                        RequestedSlot(
+                            run_id=self.run_id,
+                            issuer_id=iss.issuer_id,
+                            fiscal_year=fy,
+                            report_type=rt,
+                            language="EN",
+                            country_iso3=iss.country_iso3 or self.country_iso3,
+                            mic=iss.mic or self.mic,
+                            ticker=iss.ticker,
+                            isin=iss.isin,
+                            lei=iss.lei,
+                        )
+                    )
+        return slots
 
     def to_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +223,7 @@ class CohortManifest:
             "requested_count": self.requested_count,
             "selected_count": self.selected_count,
             "fiscal_years": self.fiscal_years,
+            "report_types": self.report_types,
             "created_at": self.created_at,
             "issuers": [i.to_dict() for i in self.issuers],
         }
@@ -212,6 +243,7 @@ class CohortManifest:
             requested_count=data["requested_count"],
             selected_count=data["selected_count"],
             fiscal_years=data["fiscal_years"],
+            report_types=data.get("report_types", ["AR", "SR"]),
             created_at=data.get("created_at", ""),
             issuers=issuers,
         )

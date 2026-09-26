@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 import time
@@ -87,10 +88,13 @@ def parse_plain_english_directive(prompt: str) -> Dict[str, Any]:
             "middle east", "middleeast", "oman", "msx", "jordan", "ase", "uae", "dubai", "dfm",
             "abu dhabi", "abudhabi", "adx", "saudi", "tadawul", "qatar", "qse", "bahrain", "kuwait", "boursa kuwait",
         ],
+        "Philippines": [
+            "philippines", "philippine", "pse", "xphs", "manila", "filipino", "edge",
+        ],
     }
 
     # Explicit directive exclusion check
-    if any(ex in p_lower for ex in ["palestine", "israel", "pse", "pex", "tase"]):
+    if any(ex in p_lower for ex in ["palestine", "israel", "pex", "xpsx", "tase"]):
         raise ValueError(f"Directives targeting Palestine or Israel are explicitly excluded: '{prompt}'")
 
     for m, kw_list in market_keywords.items():
@@ -139,11 +143,22 @@ def parse_plain_english_directive(prompt: str) -> Dict[str, Any]:
         # Will be calculated dynamically based on completed issuers
         offset = -1  # Flag for auto-offset
 
+    # 4. Report Type detection (AR, SR / ESG)
+    p_has_sr = bool(re.search(r"\b(?:sustainab\w*|esg|csr|climate|environmental|integrated|sr|ir|brsr|databook)\b", p_lower))
+    p_has_ar = bool(re.search(r"\b(?:annual|10-k|20-f|statutory|financial\w*|ar)\b", p_lower))
+
+    report_types = []
+    if p_has_ar or not p_has_sr:
+        report_types.append("AR")
+    if p_has_sr:
+        report_types.append("SR")
+
     return {
         "market": market,
         "count": count,
         "fiscal_years": fiscal_years,
         "offset": offset,
+        "report_types": report_types,
     }
 
 
@@ -162,6 +177,7 @@ class Coordinator:
         market_name = parsed["market"]
         count = parsed["count"]
         fiscal_years = parsed["fiscal_years"]
+        report_types = parsed.get("report_types", ["AR"])
         target_corpus = custom_corpus or self.corpus_root
 
         adapter = get_market_adapter(market_name)
@@ -175,7 +191,7 @@ class Coordinator:
             # Auto-skip completed issuers
             offset = 0  # select_exact_cohort automatically skips completed issuers in target corpus
 
-        print(f"[{market_name}] Selecting exact cohort of {count} issuers for {fiscal_years}...")
+        print(f"[{market_name}] Selecting exact cohort of {count} issuers for {fiscal_years} (types: {report_types})...")
         cohort = select_exact_cohort(
             market=market_name,
             requested_count=count,
@@ -184,6 +200,7 @@ class Coordinator:
             corpus_root=target_corpus,
             manifest_dir=adapter.manifest_dir,
             offset=offset,
+            report_types=report_types,
         )
         print(f"[{market_name}] Frozen cohort manifest: {len(cohort.issuers)} issuers staged in run {cohort.run_id}")
 
@@ -210,7 +227,7 @@ class Coordinator:
             directive=prompt,
             requested_issuers=count,
             selected_current_issuers=len(cohort.issuers),
-            issuer_year_slots=len(cohort.issuers) * len(fiscal_years),
+            issuer_year_slots=len(cohort.issuers) * len(fiscal_years) * len(cohort.report_types),
             verified_pdfs=verified,
             promoted_pdfs=promoted,
             staged_unresolved_identity=staged,
@@ -229,6 +246,39 @@ class Coordinator:
         summary_path = adapter.manifest_dir / f"{cohort.run_id}_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary.to_dict(), f, indent=2)
+
+        # Export audit CSVs: coverage.csv and missing.csv
+        audit_dir = adapter.local_dir / "audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+
+        coverage_path = audit_dir / "coverage.csv"
+        with open(coverage_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "run_id", "issuer_id", "fiscal_year", "report_type",
+                "status", "sha256", "page_count", "file_size_bytes",
+                "destination_path", "source_url", "reason", "elapsed_seconds",
+            ])
+            for r in results:
+                writer.writerow([
+                    r.run_id, r.issuer_id, r.fiscal_year, r.report_type,
+                    r.status, r.sha256, r.page_count, r.file_size_bytes,
+                    r.destination_path, r.source_url, r.reason, r.elapsed_seconds,
+                ])
+
+        missing_path = audit_dir / "missing.csv"
+        with open(missing_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "run_id", "issuer_id", "fiscal_year", "report_type",
+                "status", "reason",
+            ])
+            for r in results:
+                if r.status in ("UNRESOLVED", "FAILED", "STAGED_UNRESOLVED_IDENTITY") or r.page_count == 0:
+                    writer.writerow([
+                        r.run_id, r.issuer_id, r.fiscal_year, r.report_type,
+                        r.status, r.reason,
+                    ])
 
         summary.print_summary()
         return summary

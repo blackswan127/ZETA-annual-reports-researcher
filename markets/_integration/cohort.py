@@ -43,23 +43,40 @@ def check_issuer_completed_in_corpus(
     issuer: CurrentIssuerRecord,
     fiscal_years: List[int],
     corpus_root: Path,
+    report_types: Optional[List[str]] = None,
 ) -> bool:
-    """Check if all requested fiscal years for this issuer already exist in GLOBAL_SUSTAINABILITY_DATABASE."""
+    """Check if all requested fiscal years and report types for this issuer already exist in GLOBAL_SUSTAINABILITY_DATABASE."""
     if not (is_valid_lei(issuer.lei) and is_valid_isin(issuer.isin)):
         return False
 
+    r_types = report_types if report_types else ["AR"]
+
     for fy in fiscal_years:
-        rel = build_sop_relative_path(
+        ir_rel = build_sop_relative_path(
             issuer.country_iso3,
             issuer.mic,
             issuer.lei,
             issuer.isin,
             issuer.ticker,
             fy,
+            report_type="IR",
         )
-        dest = corpus_root / rel
-        if not dest.exists():
-            return False
+        if (corpus_root / ir_rel).exists():
+            continue  # IR combines financial and ESG narrative, fulfilling both slots
+
+        for r_type in r_types:
+            rel = build_sop_relative_path(
+                issuer.country_iso3,
+                issuer.mic,
+                issuer.lei,
+                issuer.isin,
+                issuer.ticker,
+                fy,
+                report_type=r_type,
+            )
+            dest = corpus_root / rel
+            if not dest.exists():
+                return False
     return True
 
 
@@ -72,10 +89,12 @@ def select_exact_cohort(
     manifest_dir: Path,
     offset: int = 0,
     force_all: bool = False,
+    report_types: Optional[List[str]] = None,
 ) -> CohortManifest:
     """Deterministically select exact-N active issuers for a run, excluding already completed ones."""
     info = resolve_market_info(market)
     canonical_market = info["name"]
+    r_types = report_types if report_types else ["AR"]
 
     # Market-specific deduplication
     if canonical_market == "India":
@@ -94,7 +113,7 @@ def select_exact_cohort(
     # Filter out issuers already completed in corpus
     eligible: List[CurrentIssuerRecord] = []
     for issuer in clean_roster:
-        if not force_all and corpus_root.exists() and check_issuer_completed_in_corpus(issuer, fiscal_years, corpus_root):
+        if not force_all and corpus_root.exists() and check_issuer_completed_in_corpus(issuer, fiscal_years, corpus_root, report_types=r_types):
             continue
         eligible.append(issuer)
 
@@ -102,7 +121,8 @@ def select_exact_cohort(
     selected = eligible[offset : offset + requested_count] if requested_count > 0 else eligible[offset:]
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    run_id = f"{timestamp}_{canonical_market}_N{len(selected)}"
+    type_tag = "_".join(r_types)
+    run_id = f"{timestamp}_{canonical_market}_N{len(selected)}_{type_tag}"
 
     manifest = CohortManifest(
         run_id=run_id,
@@ -113,6 +133,7 @@ def select_exact_cohort(
         selected_count=len(selected),
         fiscal_years=fiscal_years,
         issuers=selected,
+        report_types=r_types,
     )
 
     # Freeze to JSON and CSV

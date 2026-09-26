@@ -22,16 +22,8 @@ logger = logging.getLogger("africa_waves")
 
 WAVES = [
     {
-        "name": "Wave 1 (Open Disclosure & High Reliability Markets)",
-        "countries": ["ZMB", "TZA", "MWI", "GHA", "BWA", "ZWE"],
-    },
-    {
-        "name": "Wave 2 (Mid-Cap & Direct Disclosure Feeds)",
-        "countries": ["NGA", "KEN", "NAM", "UGA", "MUS", "RWA", "SWZ"],
-    },
-    {
-        "name": "Wave 3 (Large Cap & Frontier Markets)",
-        "countries": ["ZAF", "SYC", "SLE"],
+        "name": "Wave 3 (South Africa Harvest)",
+        "countries": ["ZAF"],
     },
 ]
 

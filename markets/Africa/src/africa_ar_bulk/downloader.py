@@ -22,6 +22,12 @@ try:
 except ImportError:
     HAS_PYPDF = False
 
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -84,10 +90,19 @@ class Downloader:
         if sz < min_bytes:
             return False, 0, f"File size ({sz} bytes) is below minimum ({min_bytes} bytes)"
 
-        with open(p, "rb") as f:
-            header = f.read(10)
-            if b"%PDF-" not in header:
-                return False, 0, "Missing '%PDF-' header signature"
+        header = b""
+        for attempt in range(3):
+            try:
+                with open(p, "rb") as f:
+                    header = f.read(10)
+                break
+            except OSError:
+                if attempt == 2:
+                    return False, 0, "Unable to read file header (file locked or invalid)"
+                time.sleep(0.2)
+
+        if b"%PDF-" not in header:
+            return False, 0, "Missing '%PDF-' header signature"
 
         if HAS_PYMUPDF:
             try:
@@ -169,6 +184,23 @@ class Downloader:
                     }
                 except Exception as e:
                     last_exc = e
+                    if HAS_CURL_CFFI:
+                        try:
+                            r_cffi = await asyncio.to_thread(cffi_requests.get, url, impersonate="chrome120", timeout=self.timeout)
+                            if r_cffi.status_code == 200 and len(r_cffi.content) >= min_bytes and b"%PDF-" in r_cffi.content[:10]:
+                                with open(part, "wb") as f:
+                                    f.write(r_cffi.content)
+                                valid, pages, reason = self.validate_pdf(part, min_bytes=min_bytes)
+                                if valid:
+                                    os.replace(part, dest)
+                                    return {
+                                        "sha256": sha256_file(dest),
+                                        "bytes": dest.stat().st_size,
+                                        "pages": pages,
+                                        "http_status": 200,
+                                    }
+                        except Exception:
+                            pass
                     if attempt == self.retries:
                         part.unlink(missing_ok=True)
                         raise

@@ -53,8 +53,8 @@ class Downloader:
         self,
         workers: int = 16,
         rps: float = 4.0,
-        timeout: float = 60.0,
-        retries: int = 5,
+        timeout: float = 20.0,
+        retries: int = 3,
         user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ):
         self.sem = asyncio.Semaphore(max(1, workers))
@@ -67,7 +67,7 @@ class Downloader:
             "Accept-Language": "en-US,en;q=0.9",
         }
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=20.0, read=timeout),
+            timeout=httpx.Timeout(timeout, connect=8.0, read=timeout),
             follow_redirects=True,
             headers=headers,
             limits=httpx.Limits(max_connections=workers * 2, max_keepalive_connections=workers),
@@ -165,10 +165,13 @@ class Downloader:
                     }
                 except Exception as e:
                     last_exc = e
+                    if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (400, 401, 403, 404, 410):
+                        part.unlink(missing_ok=True)
+                        raise
                     if attempt == self.retries:
                         part.unlink(missing_ok=True)
                         raise
-                    delay = min(25.0, (1.5 ** attempt) + random.random() * 0.5)
+                    delay = min(15.0, (1.5 ** attempt) + random.random() * 0.5)
                     await asyncio.sleep(delay)
 
             assert last_exc is not None

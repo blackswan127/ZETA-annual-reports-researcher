@@ -66,7 +66,7 @@ class AfricaPipeline:
             async with sem:
                 # Tier 1: AfricanFinancials Aggregator
                 try:
-                    cands = await af_adapter.discover_candidates(iss, self.config.start_year, self.config.end_year)
+                    cands = await asyncio.wait_for(af_adapter.discover_candidates(iss, self.config.start_year, self.config.end_year), timeout=25.0)
                     for c in cands:
                         self.db.add_candidate(c)
                         total_discovered += 1
@@ -75,7 +75,7 @@ class AfricaPipeline:
 
                 # Tier 2: Direct Exchange Disclosures
                 try:
-                    cands = await direct_adapter.discover_candidates(iss, self.config.start_year, self.config.end_year)
+                    cands = await asyncio.wait_for(direct_adapter.discover_candidates(iss, self.config.start_year, self.config.end_year), timeout=15.0)
                     for c in cands:
                         self.db.add_candidate(c)
                         total_discovered += 1
@@ -85,7 +85,7 @@ class AfricaPipeline:
                 # Tier 3: Issuer Corporate IR Crawler
                 if iss.source_url:
                     try:
-                        cands = await ir_crawler.discover_candidates(iss, self.config.start_year, self.config.end_year)
+                        cands = await asyncio.wait_for(ir_crawler.discover_candidates(iss, self.config.start_year, self.config.end_year), timeout=35.0)
                         for c in cands:
                             self.db.add_candidate(c)
                             total_discovered += 1
@@ -156,7 +156,7 @@ class AfricaPipeline:
                     return
 
             try:
-                res = await downloader.get(url, dest, min_bytes=self.config.min_pdf_bytes)
+                res = await asyncio.wait_for(downloader.get(url, dest, min_bytes=self.config.min_pdf_bytes), timeout=30.0)
                 self.db.mark_download(
                     cand_id, target_state, attempts=1,
                     bytes_downloaded=res["bytes"], http_status=res["http_status"],
@@ -164,6 +164,9 @@ class AfricaPipeline:
                 )
                 self.db.update_slot_status(iss_id, fy, target_state, report_type=rtype)
                 total_downloaded += 1
+            except asyncio.TimeoutError:
+                self.db.mark_download(cand_id, "FAILED", attempts=1, error="Download timed out after 30s", local_path=str(dest))
+                self.db.update_slot_status(iss_id, fy, "FAILED", report_type=rtype)
             except Exception as e:
                 self.db.mark_download(cand_id, "FAILED", attempts=1, error=str(e), local_path=str(dest))
                 self.db.update_slot_status(iss_id, fy, "FAILED", report_type=rtype)

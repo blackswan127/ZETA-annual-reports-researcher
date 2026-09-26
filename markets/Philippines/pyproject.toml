@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phl-pse-bulk"
+version = "0.1.0"
+description = "High-speed production-grade annual and sustainability report harvester for the Philippine Stock Exchange"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0",
+    "PyMuPDF>=1.24.0",
+    "beautifulsoup4>=4.12.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+pse-harvest = "phl_pse_bulk.cli:main"

@@ -22,27 +22,67 @@ def stable_candidate_id(issuer_id: str, fy: Optional[int], report_type: str, url
     return hashlib.sha256(seed).hexdigest()[:24]
 
 
+try:
+    from curl_cffi.requests import AsyncSession
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+
+
 class DirectExchangeAdapter(BaseSourceAdapter):
-    """Direct exchange portal adapter for African financial disclosure feeds."""
+    """Direct exchange portal adapter for African financial disclosure feeds with WAF bypass."""
 
     def __init__(
         self,
-        timeout: float = 30.0,
+        timeout: float = 25.0,
         user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ):
         self.timeout = timeout
+        self.user_agent = user_agent
         self.headers = {
             "User-Agent": user_agent,
             "Accept": "text/html,application/xhtml+xml,application/json,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
         }
+        self.session: Optional[Any] = None
+        if HAS_CURL_CFFI:
+            try:
+                self.session = AsyncSession(impersonate="chrome120", timeout=timeout, headers=self.headers)
+            except Exception as e:
+                logger.debug(f"Failed to initialize curl_cffi AsyncSession in ExchangeAdapter: {e}")
+                self.session = None
+
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=15.0),
+            timeout=httpx.Timeout(timeout, connect=10.0),
             follow_redirects=True,
             headers=self.headers,
         )
 
     async def close(self):
+        if self.session:
+            try:
+                await self.session.close()
+            except Exception:
+                pass
         await self.client.aclose()
+
+    async def _get_page(self, url: str) -> Optional[str]:
+        if self.session:
+            try:
+                r = await self.session.get(url)
+                if r.status_code == 200:
+                    return r.text
+            except Exception:
+                pass
+
+        try:
+            r = await self.client.get(url, timeout=12.0)
+            if r.status_code == 200:
+                return r.text
+        except Exception:
+            pass
+
+        return None
 
     async def discover_candidates(
         self,
@@ -240,54 +280,78 @@ class DirectExchangeAdapter(BaseSourceAdapter):
     async def _discover_rse_rwanda(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
         candidates: List[Candidate] = []
         urls = [
-            f"https://rse.rw/reports/",
+            "https://rse.rw/reports/",
+            "https://rse.rw/listed-companies/",
             f"https://rse.rw/listed-securities/{issuer.ticker.lower()}",
+            "https://cma.rw/reports/",
         ]
         for url in urls:
             try:
-                r = await self.client.get(url)
-                if r.status_code == 200:
-                    candidates.extend(self._extract_pdf_candidates(r.text, url, issuer, start_year, end_year, "RSE_RWANDA_DIRECT"))
+                html = await self._get_page(url)
+                if html:
+                    candidates.extend(self._extract_pdf_candidates(html, url, issuer, start_year, end_year, "RSE_RWANDA_DIRECT"))
             except Exception:
                 pass
         return candidates
 
     async def _discover_ese_eswatini(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
         candidates: List[Candidate] = []
-        url = f"https://ese.co.sz/financial-results/"
-        try:
-            r = await self.client.get(url)
-            if r.status_code == 200:
-                candidates.extend(self._extract_pdf_candidates(r.text, url, issuer, start_year, end_year, "ESE_ESWATINI_DIRECT"))
-        except Exception:
-            pass
+        urls = [
+            "https://ese.co.sz/financial-results/",
+            "https://ese.co.sz/listed-companies/",
+            "https://ese.co.sz/market-reports/",
+        ]
+        for url in urls:
+            try:
+                html = await self._get_page(url)
+                if html:
+                    candidates.extend(self._extract_pdf_candidates(html, url, issuer, start_year, end_year, "ESE_ESWATINI_DIRECT"))
+            except Exception:
+                pass
         return candidates
 
     async def _discover_merj_seychelles(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
         candidates: List[Candidate] = []
-        url = f"https://merj.net/market-data/disclosures/"
-        try:
-            r = await self.client.get(url)
-            if r.status_code == 200:
-                candidates.extend(self._extract_pdf_candidates(r.text, url, issuer, start_year, end_year, "MERJ_SEYCHELLES_DIRECT"))
-        except Exception:
-            pass
+        urls = [
+            "https://merj.net/market-data/disclosures/",
+            "https://merj.exchange/listed-companies/",
+            "https://merj.exchange/news/",
+        ]
+        for url in urls:
+            try:
+                html = await self._get_page(url)
+                if html:
+                    candidates.extend(self._extract_pdf_candidates(html, url, issuer, start_year, end_year, "MERJ_SEYCHELLES_DIRECT"))
+            except Exception:
+                pass
         return candidates
 
     async def _discover_jse_south_africa(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
         candidates: List[Candidate] = []
         url = f"https://www.jse.co.za/current-companies/company-announcements?symbol={issuer.ticker}"
         try:
-            r = await self.client.get(url)
-            if r.status_code == 200:
-                candidates.extend(self._extract_pdf_candidates(r.text, url, issuer, start_year, end_year, "JSE_SENS_DIRECT"))
+            html = await self._get_page(url)
+            if html:
+                candidates.extend(self._extract_pdf_candidates(html, url, issuer, start_year, end_year, "JSE_SENS_DIRECT"))
         except Exception:
             pass
         return candidates
 
     async def _discover_slse_sierra_leone(self, issuer: Issuer, start_year: int, end_year: int) -> List[Candidate]:
-        # Sierra Leone is very small with few equities; direct exchange portal has minimal automated filings
-        return []
+        candidates: List[Candidate] = []
+        urls = [
+            "https://www.rcbank.org.sl/annual-reports/",
+            "https://www.rcbank.org.sl/publications/",
+            "https://bsl.gov.sl/annual-reports/",
+        ]
+        for url in urls:
+            try:
+                html = await self._get_page(url)
+                if html:
+                    candidates.extend(self._extract_pdf_candidates(html, url, issuer, start_year, end_year, "SLSE_SIERRA_LEONE_DIRECT"))
+            except Exception:
+                pass
+        return candidates
 
     def _extract_pdf_candidates(
         self,
